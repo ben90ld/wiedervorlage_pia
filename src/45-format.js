@@ -20,14 +20,17 @@
     return JSON.stringify([h.format, h.formatVersion, h.createdAt, h.key.keyId, h.payload.compression]);
   };
 
-  F.encode = async function (payload, key, keyInfo) {
+  F.SYNC_FORMAT = 'wiedervorlage-sync';
+
+  // fmt: Dateiart ('wiedervorlage-backup' oder 'wiedervorlage-sync'); fließt in die Zusatzdaten ein
+  F.encode = async function (payload, key, keyInfo, fmt) {
     var text = JSON.stringify(payload);
     var hash = await C.sha256Hex(text);
     var bytes = C.encodeText(text);
     var compression = 'none';
     if (C.canCompress()) { bytes = await C.gzip(bytes); compression = 'gzip'; }
     var header = {
-      format: F.FORMAT, formatVersion: F.VERSION, appVersion: WV.VERSION, createdAt: D.isoNow(),
+      format: fmt || F.FORMAT, formatVersion: F.VERSION, appVersion: WV.VERSION, createdAt: D.isoNow(),
       key: keyInfo, payload: { alg: 'AES-GCM', compression: compression, iv: '', data: '' }
     };
     var sealed = await C.seal(key, bytes, F.aad(header));
@@ -37,10 +40,10 @@
   };
 
   // Prüft die äußere Struktur, ohne zu entschlüsseln
-  F.parse = function (text) {
+  F.parse = function (text, fmt) {
     var h;
     try { h = JSON.parse(text); } catch (e) { throw fail('FORMAT', 'Die Datei ist keine gültige Sicherung (kein JSON).'); }
-    if (!h || h.format !== F.FORMAT) throw fail('FORMAT', 'Die Datei ist keine Wiedervorlage-Sicherung.');
+    if (!h || h.format !== (fmt || F.FORMAT)) throw fail('FORMAT', 'Die Datei ist keine Wiedervorlage-Sicherung.');
     if (typeof h.formatVersion !== 'number') throw fail('FORMAT', 'Formatversion fehlt.');
     if (h.formatVersion > F.VERSION) throw fail('NEWER', 'Die Sicherung stammt aus einer neueren Programmversion. Bitte zuerst die App aktualisieren.');
     if (!C.validKeyInfo(h.key)) throw fail('FORMAT', 'Schlüsselangaben der Sicherung sind unvollständig.');
@@ -110,7 +113,11 @@
   };
 
   F.sanitize = function (p) {
-    var out = { schema: p.schema, exportedAt: p.exportedAt || null, sourceDevice: p.sourceDevice || null, tasks: [], patients: [], local: [], skipped: 0 };
+    var dev = null;
+    if (isObj(p.device) && typeof p.device.id === 'string') {
+      dev = { id: p.device.id.slice(0, 32), label: typeof p.device.label === 'string' ? p.device.label.slice(0, 40) : '' };
+    }
+    var out = { schema: p.schema, exportedAt: p.exportedAt || null, sourceDevice: p.sourceDevice || null, device: dev, tasks: [], patients: [], local: [], skipped: 0 };
     (Array.isArray(p.tasks) ? p.tasks : []).forEach(function (r) {
       if (F.validTask(r)) { if (!r.cf) r.cf = {}; out.tasks.push(r); } else out.skipped++;
     });

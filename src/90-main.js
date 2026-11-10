@@ -3,6 +3,10 @@
   'use strict';
   var WV = root.WV, doc = root.document;
 
+  // Rückkehr von Google sofort auswerten und das Token aus der Adresszeile entfernen
+  var authReturn = null;
+  try { authReturn = WV.auth.handleReturn(); } catch (e) { authReturn = { error: 'state_mismatch' }; }
+
   async function boot() {
     WV.ui.applyTheme();
     // Einbettung in fremde Seiten verhindern
@@ -11,7 +15,6 @@
       return;
     }
     if (!WV.crypto.available()) {
-      // ohne Web Crypto keine verschlüsselte Sicherung – App bleibt nutzbar, Hinweis in den Einstellungen
       WV.state.fatal = 'Dieser Browser stellt keine Verschlüsselungsfunktionen bereit. Sicherungen sind hier nicht möglich.';
     }
     try {
@@ -24,14 +27,18 @@
     }
     await WV.ui.loadState();
     await WV.backupCtl.init();
+    await WV.sync.init();
     WV.ui.init();
+    WV.ui.initSync();
     WV.ui.render();
     WV.ui.focusQuick();
     WV.db.requestPersist().then(function (p) { WV.state.persisted = p; });
     WV.ui.initSW();
+    doc.documentElement.setAttribute('data-ready', '1');
+    // Synchronisation bzw. Rückkehr von Google
+    WV.ui.handleAuthReturn(authReturn);
     // Ungesicherte Änderungen vom letzten Mal nachholen (ohne Dialog)
     setTimeout(function () { WV.backupCtl.runAuto(); }, 1500);
-    doc.documentElement.setAttribute('data-ready', '1');
   }
 
   if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', boot);

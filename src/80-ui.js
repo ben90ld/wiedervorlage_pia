@@ -49,7 +49,8 @@
   var S = WV.state = {
     tasks: new Map(), patients: new Map(), local: new Map(), device: null,
     ui: loadUi(), view: null, today: null, swWaiting: null, swUpdating: false, persisted: null,
-    isFile: root.location.protocol === 'file:', fatal: null, stale: false
+    isFile: root.location.protocol === 'file:', fatal: null, stale: false,
+    isIOS: /iPhone|iPad|iPod/.test(root.navigator.userAgent) || (root.navigator.platform === 'MacIntel' && root.navigator.maxTouchPoints > 1)
   };
 
   WV.ui = {};
@@ -96,6 +97,7 @@
     (out.patients || []).forEach(function (r) { S.patients.set(r.id, r); });
     (out.local || []).forEach(function (r) { S.local.set(r.id, r); });
     if (typeof out.changeSeq === 'number') Ctl.noteChange(out.changeSeq);
+    if (WV.sync) WV.sync.noteChange();
     if (!persistAsked) { persistAsked = true; DB.requestPersist().then(function (p) { S.persisted = p; }); }
     return out;
   }
@@ -247,6 +249,10 @@
       box.appendChild(h('div', { class: 'banner info' }, [icon('download'), h('span', null, 'Eine neue Version der Wiedervorlage ist verfügbar.'),
         h('button', { type: 'button', class: 'btn small primary', onclick: applyUpdate }, 'Jetzt aktualisieren')]));
     }
+    if (S.authBanner && WV.sync && WV.sync.enabled()) {
+      box.appendChild(h('div', { class: 'banner info' }, [icon('restore'), h('span', null, S.authBanner + ' Für die Synchronisation bitte kurz anmelden.'),
+        h('button', { type: 'button', class: 'btn small primary', onclick: function () { S.authBanner = null; goGoogle('select_account', 'manual'); } }, 'Mit Google anmelden')]));
+    }
     var st = Ctl.status();
     if (st.unbackedOld && !S.ui.bannerLater) {
       box.appendChild(h('div', { class: 'banner warn' }, [icon('lock'),
@@ -275,6 +281,7 @@
     });
     S.view = view;
     renderCounters(view.counts);
+    if (WV.ui.renderSyncPill) WV.ui.renderSyncPill();
     renderBackupPill();
     renderBanners();
     renderFilters();
@@ -867,7 +874,10 @@
   }
 
   // ---------- Bearbeiten ----------
-  var E = { id: null, origRecall: null, postponeCounted: false, type: null, typeAuto: false, important: false, status: 'open', picker: null, saveTimer: null, saving: Promise.resolve() };
+  // dirty: Felder, die in diesem Fenster geändert wurden – nur diese werden gespeichert. So überschreibt
+  // ein offenes Bearbeitungsfenster keine zwischenzeitlich synchronisierten Änderungen anderer Felder.
+  var E = { id: null, origRecall: null, postponeCounted: false, type: null, typeAuto: false, important: false, status: 'open', picker: null, saveTimer: null, saving: Promise.resolve(), dirty: {} };
+  function markDirty(f) { E.dirty[f] = true; }
   var STATUS_OPTS = [['open', 'Offen'], ['done', 'Erledigt']];
 
   function setSaveState(text, cls) {
@@ -917,19 +927,21 @@
     });
   }
 
-  function fillEdit(t) {
-    $('eTitle').value = t.v.title;
-    E.picker.set(t.v.patientId);
-    E.type = t.v.type; E.typeAuto = !!t.v.typeAuto;
-    paintTypeChips($('eTypes'), E.type, false);
-    $('eRecall').value = t.v.recall || '';
-    $('eDeadline').value = t.v.deadline || '';
-    E.important = !!t.v.important;
-    paintToggle($('eImportant'), E.important, 'Wichtig');
-    E.status = t.v.status === 'done' ? 'done' : 'open';
-    paintSeg($('eStatus'), E.status);
+  // onlyClean: nur Felder neu füllen, die im Fenster nicht gerade geändert werden (nach Synchronisation)
+  function fillEdit(t, onlyClean) {
+    var d = onlyClean ? E.dirty : {};
+    if (!onlyClean) E.dirty = {};
+    if (!d.title) $('eTitle').value = t.v.title;
+    if (!d.patient && !(onlyClean && doc.activeElement === $('ePatient'))) E.picker.set(t.v.patientId);
+    if (!d.type) { E.type = t.v.type; E.typeAuto = !!t.v.typeAuto; paintTypeChips($('eTypes'), E.type, false); }
+    if (!d.recall) $('eRecall').value = t.v.recall || '';
+    if (!d.deadline) $('eDeadline').value = t.v.deadline || '';
+    if (!d.important) { E.important = !!t.v.important; paintToggle($('eImportant'), E.important, 'Wichtig'); }
+    if (!d.status) { E.status = t.v.status === 'done' ? 'done' : 'open'; paintSeg($('eStatus'), E.status); }
     var loc = S.local.get(t.id);
-    $('eNote').value = loc && loc.note ? loc.note : '';
+    if (!d.note) $('eNote').value = loc && loc.note ? loc.note : '';
+    $('eNoteField').hidden = S.isIOS && !(loc && loc.note);
+    $('eNoteHidden').hidden = !$('eNoteField').hidden;
     renderEditConflicts(t);
     var pc = M.postponeCount(t);
     $('eMeta').textContent = 'Erstellt ' + D.fmtDateTime(t.v.createdAt) + ' · Geändert ' + D.fmtDateTime(t.u) +
@@ -939,7 +951,7 @@
   function openEdit(id) {
     var t = S.tasks.get(id);
     if (!t) return;
-    E.id = id; E.origRecall = t.v.recall; E.postponeCounted = false;
+    E.id = id; E.origRecall = t.v.recall; E.postponeCounted = false; E.dirty = {};
     E.picker.reset();
     fillEdit(t);
     setSaveState('');
@@ -948,6 +960,12 @@
     $('eTitle').focus();
   }
   WV.ui.openEdit = openEdit;
+  // Nach Synchronisation: offenes Bearbeitungsfenster aktualisieren, ohne laufende Eingaben zu überschreiben
+  WV.ui.refreshEdit = function () {
+    if (!$('dlgEdit').open || !E.id) return;
+    var t = S.tasks.get(E.id);
+    if (t) fillEdit(t, true);
+  };
 
   function scheduleEditSave(delay) {
     if (E.saveTimer) clearTimeout(E.saveTimer);
@@ -964,35 +982,40 @@
     var t = S.tasks.get(id);
     if (!t) return;
     var ch = {};
+    var dirty = E.dirty;
+    var snap = { title: $('eTitle').value, patient: $('ePatient').value, recall: $('eRecall').value, deadline: $('eDeadline').value, note: $('eNote').value, type: E.type, important: E.important, status: E.status };
     var title = $('eTitle').value.trim();
-    if (!title) { setSaveState('Titel darf nicht leer sein – nicht gespeichert.', 'error'); return; }
-    if (title !== t.v.title) ch.title = title;
+    if (dirty.title) {
+      if (!title) { setSaveState('Titel darf nicht leer sein – nicht gespeichert.', 'error'); return; }
+      if (title !== t.v.title) ch.title = title;
+    }
     var ptxt = $('ePatient').value.trim();
-    if (!ptxt) { if (t.v.patientId) ch.patient = null; }
+    if (!dirty.patient) { /* unverändert */ }
+    else if (!ptxt) { if (t.v.patientId) ch.patient = null; }
     else {
       var sel = E.picker.selected || E.picker.resolve();
       if (sel && sel.id && sel.id !== t.v.patientId) ch.patient = { id: sel.id };
       else if (sel && sel.newLabel) ch.patient = { newLabel: sel.newLabel };
     }
-    if (E.type !== t.v.type) { ch.type = E.type; ch.typeAuto = false; }
+    if (dirty.type && E.type !== t.v.type) { ch.type = E.type; ch.typeAuto = false; }
     var rv = $('eRecall').value || null;
     var countPostpone = false;
-    if (rv !== (t.v.recall || null)) {
+    if (dirty.recall && rv !== (t.v.recall || null)) {
       if (rv !== null && !saneDate(rv)) { setSaveState('Wiedervorlage: bitte ein gültiges Datum eingeben.', 'error'); return; }
       ch.recall = rv;
       if (rv && !E.postponeCounted && E.origRecall && D.diff(rv, E.origRecall) > 0) { countPostpone = true; E.postponeCounted = true; }
     }
     var dv = $('eDeadline').value;
-    if ((dv || null) !== (t.v.deadline || null)) {
+    if (dirty.deadline && (dv || null) !== (t.v.deadline || null)) {
       if (dv && !saneDate(dv)) { setSaveState('Frist: bitte ein gültiges Datum eingeben.', 'error'); return; }
       ch.deadline = dv || null;
     }
-    if (E.important !== !!t.v.important) ch.important = E.important;
+    if (dirty.important && E.important !== !!t.v.important) ch.important = E.important;
     var curStatus = t.v.status === 'done' ? 'done' : 'open';
-    if (E.status !== curStatus) ch.status = E.status;
+    if (dirty.status && E.status !== curStatus) ch.status = E.status;
     var loc = S.local.get(id);
     var note = $('eNote').value;
-    var noteChanged = (note || '') !== ((loc && loc.note) || '');
+    var noteChanged = !!dirty.note && (note || '') !== ((loc && loc.note) || '');
     if (!Object.keys(ch).length && !noteChanged) { setSaveState('Gespeichert', 'ok'); return; }
     setSaveState('Speichert …');
     try {
@@ -1001,6 +1024,11 @@
         if (ch.patient && ch.patient.newLabel && out.newPatientId) E.picker.selected = { id: out.newPatientId };
       }
       if (noteChanged) await A.setLocal(id, { note: note || null });
+      // gespeicherte Felder sind nicht mehr "in Bearbeitung" (sofern seither nicht weiter getippt)
+      if (E.id === id) {
+        var cur = { title: $('eTitle').value, patient: $('ePatient').value, recall: $('eRecall').value, deadline: $('eDeadline').value, note: $('eNote').value, type: E.type, important: E.important, status: E.status };
+        Object.keys(dirty).forEach(function (k) { if (cur[k] === snap[k]) delete E.dirty[k]; });
+      }
       setSaveState('Gespeichert', 'ok');
       render();
       var nt = S.tasks.get(id);
@@ -1022,26 +1050,28 @@
   function initEdit() {
     var dlg = $('dlgEdit');
     E.picker = PatientPicker($('ePatient'), $('ePatientList'), $('ePatientHint'), {
-      onChange: function () { scheduleEditSave(0); }
+      onChange: function () { markDirty('patient'); scheduleEditSave(0); },
+      onInput: function () { markDirty('patient'); }
     });
-    buildTypeChips($('eTypes'), function (id) { E.type = id; paintTypeChips($('eTypes'), E.type, false); scheduleEditSave(0); });
+    buildTypeChips($('eTypes'), function (id) { E.type = id; markDirty('type'); paintTypeChips($('eTypes'), E.type, false); scheduleEditSave(0); });
     buildSeg($('eRecallPicks'), [['d', '+1 Tag'], ['w', '+1 Woche'], ['m', '+1 Monat']], function (unit) {
       var t = S.tasks.get(E.id);
       var base = $('eRecall').value && D.isValid($('eRecall').value) ? $('eRecall').value : (t ? t.v.recall : D.today());
       $('eRecall').value = D.postpone(base, D.today(), unit);
+      markDirty('recall');
       scheduleEditSave(0);
     }, 'small');
-    buildSeg($('eStatus'), STATUS_OPTS, function (v) { E.status = v; paintSeg($('eStatus'), v); scheduleEditSave(0); });
-    $('eImportant').addEventListener('click', function () { E.important = !E.important; paintToggle($('eImportant'), E.important, 'Wichtig'); scheduleEditSave(0); });
-    $('eTitle').addEventListener('input', function () { scheduleEditSave(); });
+    buildSeg($('eStatus'), STATUS_OPTS, function (v) { E.status = v; markDirty('status'); paintSeg($('eStatus'), v); scheduleEditSave(0); });
+    $('eImportant').addEventListener('click', function () { E.important = !E.important; markDirty('important'); paintToggle($('eImportant'), E.important, 'Wichtig'); scheduleEditSave(0); });
+    $('eTitle').addEventListener('input', function () { markDirty('title'); scheduleEditSave(); });
     $('eTitle').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); flushEdit().then(closeEdit); } });
-    $('eRecall').addEventListener('change', function () { scheduleEditSave(600); });
+    $('eRecall').addEventListener('change', function () { markDirty('recall'); scheduleEditSave(600); });
     $('eRecallClear').appendChild(icon('x'));
-    $('eRecallClear').addEventListener('click', function () { $('eRecall').value = ''; scheduleEditSave(0); });
-    $('eDeadline').addEventListener('change', function () { scheduleEditSave(600); });
+    $('eRecallClear').addEventListener('click', function () { $('eRecall').value = ''; markDirty('recall'); scheduleEditSave(0); });
+    $('eDeadline').addEventListener('change', function () { markDirty('deadline'); scheduleEditSave(600); });
     $('eDeadlineClear').appendChild(icon('x'));
-    $('eDeadlineClear').addEventListener('click', function () { $('eDeadline').value = ''; scheduleEditSave(0); });
-    $('eNote').addEventListener('input', function () { scheduleEditSave(700); });
+    $('eDeadlineClear').addEventListener('click', function () { $('eDeadline').value = ''; markDirty('deadline'); scheduleEditSave(0); });
+    $('eNote').addEventListener('input', function () { markDirty('note'); scheduleEditSave(700); });
     $('eDelete').addEventListener('click', function () {
       var id = E.id;
       flushEdit().then(function () { closeEdit(); removeTask(id); });
@@ -1151,7 +1181,7 @@
     var counts = { open: 0, done: 0, deleted: 0 };
     S.tasks.forEach(function (t) { if (t.v.purged) return; if (t.v.deleted) counts.deleted++; else if (t.v.status === 'done') counts.done++; else counts.open++; });
 
-    var body = [
+    var body = syncSection().concat([
       h('h3', null, 'Sicherung'),
       h('div', { class: 'card inner' }, statusPart),
       h('div', { class: 'card inner' }, keyPart),
@@ -1185,18 +1215,21 @@
         kv('Aufgaben', counts.open + ' offen · ' + counts.done + ' erledigt' + (counts.deleted ? ' · ' + counts.deleted + ' gelöscht (Löschmarker)' : '')),
         kv('Dauerhafter Speicher', S.persisted === true ? 'vom Browser zugesagt' : (S.persisted === false ? 'nicht zugesagt – Sicherung besonders wichtig' : 'unbekannt')),
         kv('Ausführung', S.isFile ? 'Lokale Datei (ohne Synchronisation)' : root.location.host),
-        kv('Version', WV.VERSION + ' (Etappe 2: lokal, ohne Google-Synchronisation)'),
+        kv('Version', WV.VERSION),
         S.isFile ? null : h('p', null, [h('a', { href: 'verbindungstest.html', class: 'btn small' }, 'Verbindungstest Google Drive')]),
         h('p', { class: 'muted' }, 'Organisatorische Wiedervorlage nicht dringender Aufgaben. Kein Patientenaktensystem, kein Befundarchiv, keine Alarmierung, keine medizinische Entscheidungsunterstützung. Patientenbezug nur als „Nachname, Initiale“.')
       ])
-    ];
+    ]);
     dialogShell(dlg, 'sHead', 'Einstellungen und Sicherung', body);
   }
 
   // ---------- Passphrase ----------
-  function openPass() {
+  // opts.forSync: Ersteinrichtung der Synchronisation (Schlüssel wird danach in Google Drive abgelegt)
+  function openPass(opts) {
+    opts = opts || {};
     var dlg = $('dlgPass');
     var existing = !!Ctl.key;
+    var syncOn = WV.sync && WV.sync.enabled();
     var p1 = h('input', { type: 'password', id: 'pass1', autocomplete: 'new-password', spellcheck: 'false' });
     var p2 = h('input', { type: 'password', id: 'pass2', autocomplete: 'new-password', spellcheck: 'false' });
     var show = h('input', { type: 'checkbox', id: 'passShow' });
@@ -1213,10 +1246,14 @@
       try {
         var r = await Ctl.setupKey(p1.value);
         p1.value = ''; p2.value = '';
+        if (opts.forSync) await WV.sync.enable({ keyPendingUpload: true });
+        else if (syncOn) await WV.sync.onKeyChanged();
         dlg.close();
-        toast(r && r.message ? r.message : 'Passphrase festgelegt. Sicherungen werden jetzt verschlüsselt.', { level: r && r.ok === false ? 'error' : '', timeout: 5000 });
+        toast(opts.forSync ? 'Passphrase festgelegt. Die Synchronisation ist eingerichtet.' :
+          (r && r.message ? r.message : 'Passphrase festgelegt. Sicherungen werden jetzt verschlüsselt.'), { level: r && r.ok === false ? 'error' : '', timeout: 5000 });
         render();
         if ($('dlgSettings').open) renderSettings();
+        if (opts.forSync || syncOn) WV.sync.syncNow().then(afterSync);
       } catch (e) {
         err.textContent = 'Der Schlüssel konnte nicht erzeugt werden.';
         okBtn.disabled = false; okBtn.textContent = 'Festlegen';
@@ -1224,9 +1261,12 @@
     }
     okBtn.addEventListener('click', submit);
     [p1, p2].forEach(function (el) { el.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } }); });
-    dialogShell(dlg, 'pHead', existing ? 'Neue Passphrase festlegen' : 'Passphrase für die Sicherung', [
-      h('p', null, 'Sicherungsdateien werden mit dieser Passphrase verschlüsselt. Die Passphrase selbst wird nirgends gespeichert.'),
+    dialogShell(dlg, 'pHead', opts.forSync ? 'Passphrase für Synchronisation und Sicherung' : (existing ? 'Neue Passphrase festlegen' : 'Passphrase für die Sicherung'), [
+      h('p', null, opts.forSync
+        ? 'Die Aufgaben werden vor der Übertragung zu Google Drive mit dieser Passphrase verschlüsselt. Dieselbe Passphrase gibst du später einmal auf dem iPhone ein. Sie wird nirgends gespeichert.'
+        : 'Sicherungsdateien werden mit dieser Passphrase verschlüsselt. Die Passphrase selbst wird nirgends gespeichert.'),
       existing ? h('p', { class: 'muted' }, 'Bereits vorhandene Sicherungsdateien lassen sich weiterhin nur mit der bisherigen Passphrase öffnen.') : null,
+      syncOn && existing ? h('p', { class: 'muted' }, 'Die Synchronisation ist eingerichtet: Auf den anderen Geräten musst du danach die neue Passphrase einmal eingeben.') : null,
       h('p', { class: 'muted' }, 'Empfehlung: 5–6 zufällige Wörter. Ohne die Passphrase ist eine Sicherung nicht wiederherstellbar – niemand kann sie zurücksetzen.'),
       h('label', { class: 'field' }, [h('span', { class: 'opt-label' }, 'Passphrase'), p1]),
       h('label', { class: 'field' }, [h('span', { class: 'opt-label' }, 'Wiederholen'), p2]),
@@ -1238,6 +1278,241 @@
     p1.focus();
   }
   WV.ui.openPass = openPass;
+
+  // ---------- Synchronisation ----------
+  var Y = WV.sync, AU = WV.auth;
+
+  function syncSection() {
+    var out = [h('h3', null, 'Synchronisation (Google Drive)')];
+    if (!AU.available()) {
+      out.push(h('div', { class: 'card inner' }, [h('p', { class: 'muted' }, S.isFile
+        ? 'In der lokalen Datei ist keine Synchronisation möglich. Bitte die Online-Version verwenden: https://ben90ld.github.io/wiedervorlage_pia/'
+        : 'Synchronisation ist hier nicht verfügbar.')]));
+      return out;
+    }
+    if (!Y.enabled()) {
+      out.push(h('div', { class: 'card inner' }, [
+        h('p', null, 'Klinik-PC und iPhone verwenden dann denselben Aufgabenbestand. Die Aufgaben werden vor der Übertragung mit deiner Passphrase verschlüsselt und nur im versteckten App-Ordner deines Google Drive abgelegt. Notizen bleiben auf dem jeweiligen Gerät.'),
+        h('div', { class: 'btn-row' }, [h('button', { type: 'button', class: 'btn primary', id: 'btnSyncSetup', onclick: function () { goGoogle('select_account', 'setup'); } }, 'Synchronisation einrichten')])
+      ]));
+      return out;
+    }
+    var c = Y.cfg(), st = Y.status(), exp = AU.expiresAt();
+    var others = Object.keys(c.others || {}).map(function (k) { var o = c.others[k]; return o.label + ' (Stand ' + (o.exportedAt ? D.fmtDateTime(o.exportedAt) : '–') + ')'; });
+    var auto = h('input', { type: 'checkbox', id: 'syncAuto' });
+    auto.checked = c.autoConnect !== false;
+    auto.addEventListener('change', function () { Y.setAutoConnect(auto.checked); });
+    out.push(h('div', { class: 'card inner' }, [
+      kv('Status', st.text, st.level === 'error' ? 'error' : (st.level === 'warn' ? 'warn' : '')),
+      kv('Letzter Abgleich', c.lastSyncAt ? D.fmtDateTime(c.lastSyncAt) : 'noch keiner'),
+      kv('Google-Anmeldung', AU.token() ? 'aktiv bis ' + D.fmtDateTime(new Date(exp).toISOString()).slice(-5) : 'abgelaufen – wird bei Bedarf erneuert'),
+      kv('Weitere Geräte', others.length ? others.join(', ') : 'noch keine'),
+      kv('Nicht synchronisiert', 'Notizen (bleiben auf dem jeweiligen Gerät)'),
+      Y.skipped() ? kv('Übersprungen', Y.skipped() + ' Gerätedatei(en) mit älterer Passphrase', 'warn') : null,
+      c.lastError ? kv('Letzter Fehler', c.lastError.message + ' (' + D.fmtDateTime(c.lastError.at) + ')', 'error') : null,
+      h('label', { class: 'check-row' }, [auto, ' Beim Öffnen automatisch mit Google verbinden (kurzer Wechsel zu Google und zurück)']),
+      h('div', { class: 'btn-row' }, [
+        h('button', { type: 'button', class: 'btn primary', onclick: function () { syncNowUi(true); } }, 'Jetzt synchronisieren'),
+        h('button', { type: 'button', class: 'btn', onclick: function () { goGoogle('select_account', 'manual'); } }, 'Neu bei Google anmelden'),
+        h('button', { type: 'button', class: 'btn small link', onclick: async function () {
+          await Y.disable(); toast('Synchronisation auf diesem Gerät beendet. Die Daten auf diesem Gerät bleiben erhalten.'); render(); renderSettings();
+        } }, 'Synchronisation auf diesem Gerät beenden')
+      ])
+    ]));
+    return out;
+  }
+
+  function showOverlay(text) { $('overlayText').textContent = text || 'Verbinde mit Google …'; $('overlay').hidden = false; }
+  function hideOverlay() { $('overlay').hidden = true; }
+
+  // Zu Google wechseln – vorher alle offenen Eingaben speichern
+  function goGoogle(prompt, purpose) {
+    if (!root.navigator.onLine) { toast('Keine Internetverbindung.', { level: 'warn' }); return; }
+    showOverlay('Verbinde mit Google …');
+    Promise.resolve(flushEdit()).then(function () {
+      saveDraft();
+      AU.start(prompt, purpose);
+    });
+  }
+  WV.ui.goGoogle = goGoogle;
+
+  // Läuft gerade eine Eingabe? Dann nicht automatisch zu Google wechseln.
+  function isBusy() {
+    if (doc.querySelector('dialog[open]')) return true;
+    if (Q.saving || E.saveTimer) return true;
+    if ($('qTitle').value.trim() || $('qPatient').value.trim()) return true;
+    var a = doc.activeElement;
+    if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.id !== 'search' && a.id !== 'qTitle') return true;
+    return false;
+  }
+
+  async function maybeAutoConnect() {
+    var c = Y.cfg();
+    if (!Y.enabled() || AU.token() || c.autoConnect === false) return false;
+    if (!root.navigator.onLine || doc.visibilityState !== 'visible' || Y.needKey()) return false;
+    if (!AU.mayAutoConnect() || isBusy()) return false;
+    var reachable = await AU.probe(2500);
+    if (!reachable || isBusy() || AU.token()) return false;
+    goGoogle('none', 'auto');
+    return true;
+  }
+
+  function afterSync(r) {
+    if (!r) return;
+    if (r.ok) { renderSyncPill(); if ($('dlgSettings').open) renderSettings(); return; }
+    if (r.code === 'KEY') { openUnlock(); return; }
+    renderSyncPill();
+    if ($('dlgSettings').open) renderSettings();
+  }
+
+  async function syncNowUi(manual) {
+    var st = Y.status();
+    if (st.code === 'auth') { goGoogle(AU.silentFailed() ? 'select_account' : 'none', 'manual'); return; }
+    if (st.code === 'key') { openUnlock(); return; }
+    var r = await Y.syncNow();
+    afterSync(r);
+    if (manual) {
+      if (r.ok) toast('Synchronisiert.' + (r.stats && r.stats.files ? ' ' + r.stats.tasksNew + ' neu, ' + r.stats.tasksUpdated + ' aktualisiert.' : ''), { timeout: 2500 });
+      else if (r.code === 'offline') toast('Offline – die Änderungen werden später übertragen.', { level: 'warn' });
+      else if (r.code !== 'KEY' && r.code !== 'busy' && r.code !== 'auth') toast(r.message || 'Synchronisation fehlgeschlagen.', { level: 'error', timeout: 6000 });
+    }
+  }
+  WV.ui.syncNow = syncNowUi;
+
+  function renderSyncPill() {
+    var pill = $('syncPill');
+    var st = Y.status();
+    if (st.code === 'off' || st.code === 'unavailable') { pill.hidden = true; return; }
+    pill.hidden = false;
+    var conflicts = S.view ? S.view.counts.conflicts : 0;
+    var text = st.text, level = st.level, ic = st.code === 'ok' ? 'check' : (st.code === 'error' ? 'alert' : (st.code === 'key' ? 'lock' : 'restore'));
+    if (conflicts && (st.code === 'ok' || st.code === 'pending')) { text = conflicts + ' Konflikt' + (conflicts > 1 ? 'e' : '') + ' prüfen'; level = 'warn'; ic = 'conflict'; }
+    clear(pill);
+    pill.className = 'pill lvl-' + level;
+    add(pill, [icon(ic), h('span', { class: 'pill-text' }, text)]);
+    pill.title = 'Synchronisation: ' + text;
+    pill.setAttribute('data-code', conflicts && (st.code === 'ok' || st.code === 'pending') ? 'conflict' : st.code);
+  }
+  WV.ui.renderSyncPill = renderSyncPill;
+
+  function onSyncPill() {
+    var code = $('syncPill').getAttribute('data-code');
+    if (code === 'conflict') {
+      var first = Array.from(S.tasks.values()).find(function (t) { return M.openConflicts(t).length > 0; });
+      if (first) openEdit(first.id);
+      return;
+    }
+    if (code === 'error' || code === 'offline') { openSettings(); if (code === 'error') syncNowUi(false); return; }
+    syncNowUi(true);
+  }
+
+  // Passphrase eines anderen Geräts eingeben (Schlüssel liegt in Google Drive)
+  function openUnlock(pre) {
+    var need = pre || Y.needKey();
+    if (!need || !need.info) {
+      toast('Für die Synchronisation fehlt der Schlüssel. Bitte in den Einstellungen „Neu bei Google anmelden“.', { level: 'warn', timeout: 6000 });
+      return;
+    }
+    var dlg = $('dlgPass');
+    var p = h('input', { type: 'password', id: 'unlockPass', autocomplete: 'current-password', spellcheck: 'false' });
+    var err = h('p', { class: 'hint-line warn', 'aria-live': 'polite' });
+    var okBtn = h('button', { type: 'button', class: 'btn primary' }, 'Entsperren');
+    async function submit() {
+      if (!p.value) { p.focus(); return; }
+      okBtn.disabled = true; okBtn.textContent = 'Prüfe …'; err.textContent = '';
+      try {
+        await Y.unlockWith(p.value, need.info);
+        p.value = '';
+        dlg.close();
+        toast('Passphrase übernommen. Synchronisiere …', { timeout: 3000 });
+        var r = await Y.syncNow();
+        afterSync(r);
+        render();
+      } catch (e) {
+        err.textContent = e && e.code === 'WRONG_PASSPHRASE' ? 'Passphrase falsch. Bitte erneut versuchen.' : 'Die Passphrase konnte nicht geprüft werden.';
+        okBtn.disabled = false; okBtn.textContent = 'Entsperren';
+        p.focus();
+      }
+    }
+    okBtn.addEventListener('click', submit);
+    p.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    dialogShell(dlg, 'pHead', 'Passphrase der Synchronisation', [
+      h('p', null, 'In Google Drive liegen Aufgaben, die mit einer Passphrase verschlüsselt sind (eingerichtet auf einem anderen Gerät oder dort geändert). Bitte diese Passphrase einmal eingeben.'),
+      Ctl.key ? h('p', { class: 'muted' }, 'Die Sicherungen dieses Geräts verwenden danach ebenfalls diese Passphrase. Ältere Sicherungsdateien lassen sich weiterhin mit der bisherigen Passphrase öffnen.') : null,
+      h('label', { class: 'field' }, [h('span', { class: 'opt-label' }, 'Passphrase'), p]),
+      err
+    ], [h('button', { type: 'button', class: 'btn', onclick: function () { dlg.close(); } }, 'Später'), okBtn]);
+    if (!dlg.open) dlg.showModal();
+    p.focus();
+  }
+  WV.ui.openUnlock = openUnlock;
+
+  // Rückkehr von Google auswerten (beim Start)
+  WV.ui.handleAuthReturn = async function (ret) {
+    hideOverlay();
+    if (!ret) return startupSync();
+    if (ret.error) {
+      if (ret.purpose === 'setup') { toast(AU.errorText(ret.error), { level: 'error', timeout: 0 }); return; }
+      if (ret.prompt === 'none') {
+        S.authBanner = AU.errorText(ret.error);
+        renderBanners();
+        return;
+      }
+      toast(AU.errorText(ret.error), { level: 'error', timeout: 8000 });
+      return;
+    }
+    S.authBanner = null;
+    if (ret.purpose === 'setup') {
+      showOverlay('Synchronisation wird eingerichtet …');
+      var res;
+      try { res = await Y.continueSetup(); } catch (e) { hideOverlay(); toast('Einrichtung fehlgeschlagen: ' + (e.message || 'Fehler'), { level: 'error', timeout: 0 }); return; }
+      hideOverlay();
+      if (res.need === 'create') { openPass({ forSync: true }); return; }
+      if (res.need === 'unlock') { openUnlock({ info: res.info }); return; }
+      toast(res.usedExisting ? 'Synchronisation eingerichtet. Es gilt die Passphrase deiner Sicherung.' : 'Synchronisation eingerichtet.', { timeout: 5000 });
+    }
+    var r = await Y.syncNow();
+    afterSync(r);
+  };
+
+  function startupSync() {
+    if (!Y.enabled()) return;
+    if (AU.token()) Y.syncNow().then(afterSync);
+    else maybeAutoConnect();
+  }
+
+  WV.ui.initSync = function () {
+    $('syncPill').addEventListener('click', onSyncPill);
+    Y.onStatus = function () { renderSyncPill(); };
+    Y.onNeedKey = function () { renderSyncPill(); };
+    Y.onMerged = function (stats) {
+      return WV.ui.loadState().then(function () {
+        render();
+        WV.ui.refreshEdit();
+        var parts = [];
+        if (stats.tasksNew) parts.push(stats.tasksNew + ' neu');
+        if (stats.tasksUpdated) parts.push(stats.tasksUpdated + ' geändert');
+        if (stats.conflicts) parts.push(stats.conflicts + ' Konflikt' + (stats.conflicts > 1 ? 'e' : '') + ' zu prüfen');
+        if (parts.length) toast('Vom anderen Gerät übernommen: ' + parts.join(', ') + '.', { timeout: 4000 });
+      });
+    };
+    var lastResume = 0;
+    doc.addEventListener('visibilitychange', function () {
+      if (doc.visibilityState !== 'visible' || !Y.enabled()) return;
+      var now = Date.now();
+      if (now - lastResume < 30000) return;
+      lastResume = now;
+      if (AU.token()) Y.syncNow().then(afterSync); else maybeAutoConnect();
+    });
+    root.addEventListener('online', function () { renderSyncPill(); if (Y.enabled()) { if (AU.token()) Y.syncNow().then(afterSync); else maybeAutoConnect(); } });
+    root.addEventListener('offline', renderSyncPill);
+    setInterval(function () {
+      if (doc.visibilityState === 'visible' && Y.enabled() && AU.token()) Y.syncNow().then(afterSync);
+      else renderSyncPill();
+    }, Y.PERIOD);
+    // bfcache: nach "Zurück" von Google ohne Neuladen
+    root.addEventListener('pageshow', function (e) { if (e.persisted) hideOverlay(); });
+  };
 
   // ---------- Import / Wiederherstellung ----------
   function openImport(opts) {

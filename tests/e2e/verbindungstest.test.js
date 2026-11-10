@@ -30,11 +30,11 @@ function fakeDrive(page, log) {
 }
 
 test('Verbindungstest: ohne Client-ID verständlicher Hinweis', async () => {
-  const { ctx, page, log } = await H.newPage(browser, base, { url: base + 'verbindungstest.html', now: false }).catch(async () => {
-    const ctx = await browser.newContext(); const page = await ctx.newPage(); const log = [];
-    page.on('console', (m) => log.push(m.text())); page.on('pageerror', (e) => log.push('pageerror ' + e.message));
-    await page.goto(base + 'verbindungstest.html'); return { ctx, page, log };
-  });
+  const ctx = await browser.newContext(); const page = await ctx.newPage(); const log = [];
+  page.on('console', (m) => log.push(m.text())); page.on('pageerror', (e) => log.push('pageerror ' + e.message));
+  // Konfiguration ohne Client-ID nachbilden
+  await page.route('**/config.js', (route) => route.fulfill({ status: 200, contentType: 'text/javascript', body: "self.WV_CONFIG = { googleClientId: '' };" }));
+  await page.goto(base + 'verbindungstest.html');
   assert.match(await page.textContent('#env'), /Client-ID\s*fehlt noch/);
   await page.click('#btnLogin');
   assert.match(await page.textContent('#results'), /Client-ID fehlt/);

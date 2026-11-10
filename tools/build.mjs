@@ -32,8 +32,9 @@ let single = html
   .replace(/<link rel="apple-touch-icon"[^>]*>\n?/, '')
   .replace(/<link rel="icon"[^>]*>/, `<link rel="icon" type="image/png" href="${favicon}">`);
 single = single.split('<link rel="stylesheet" href="styles.css">').join(`<style>${css}</style>`);
+single = single.split('<script src="config.js"></script>\n').join('');
 single = single.split('<script src="app.js"></script>').join(`<script>${js}</script>`);
-if (single.includes('href="styles.css"') || single.includes('src="app.js"')) throw new Error('Einbetten fehlgeschlagen');
+if (single.includes('href="styles.css"') || single.includes('src="app.js"') || single.includes('src="config.js"')) throw new Error('Einbetten fehlgeschlagen');
 fs.mkdirSync(path.join(root, 'dist'), { recursive: true });
 const out = path.join(root, 'dist', 'Wiedervorlage_lokal.html');
 fs.writeFileSync(out, single);

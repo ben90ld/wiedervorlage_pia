@@ -1,6 +1,6 @@
 # Wiedervorlage – Technische Architektur (Entwurf Etappe 1)
 
-Stand: 10.11.2026 · Status: Etappe 2 umgesetzt (lokal, ohne Synchronisation)
+Stand: 10.11.2026 · Status: Etappe 2 und 4 umgesetzt (lokal + verschlüsselte Synchronisation), Etappe 3 offen
 
 Dieses Dokument ist die technische Referenz für die Umsetzung. Die verständliche Fassung mit Empfehlung und Einrichtungsschritten steht in der Antwort im Chat.
 
@@ -123,7 +123,8 @@ Ablauf eines Sync-Durchgangs (unter `navigator.locks`):
 4. Wenn lokale Änderungen seit dem letzten Upload vorliegen: gesamten synchronisierten Stand serialisieren, komprimieren (sofern `CompressionStream` verfügbar), verschlüsseln, eigene Datei per `uploadType=media` ersetzen.
 5. Zeitpunkt und Status speichern.
 
-Auslöser: App-Start, Rückkehr in die App (`visibilitychange`), `online`-Ereignis, 5 s nach der letzten Änderung (entprellt), Button „Jetzt synchronisieren“. Fehler werden still protokolliert (ohne Inhalte) und als Status angezeigt; erneuter Versuch mit wachsendem Abstand, keine wiederholten Dialoge.
+Auslöser: App-Start, Rückkehr in die App (`visibilitychange`, höchstens alle 30 s), `online`-Ereignis, 4 s nach der letzten Änderung (entprellt), alle 5 Minuten bei sichtbarer App, Antippen des Sync-Symbols. Gleichzeitige Aufrufe werden zu höchstens einem Folgelauf zusammengefasst; über `navigator.locks` sind auch mehrere Fenster serialisiert. Unveränderter Stand (SHA-256 über Aufgaben/Patienten) wird nicht erneut hochgeladen.
+Bearbeitungsfenster: gespeichert werden nur die im Fenster geänderten Felder; während der Bearbeitung eintreffende Änderungen anderer Felder werden im Fenster nachgetragen statt überschrieben. Fehler werden still protokolliert (ohne Inhalte) und als Status angezeigt; erneuter Versuch mit wachsendem Abstand, keine wiederholten Dialoge.
 
 Neues Gerät oder gelöschtes Browserprofil: neue Geräte-ID. Die Datei der alten ID bleibt lesbar und wird normal eingemischt. Veraltete Gerätedateien können später gefahrlos aufgeräumt werden (nur wenn ihr Inhalt vollständig im eigenen Stand enthalten ist). Die Geräte-ID wird bewusst nicht aus Sicherungen übernommen, damit nie zwei Geräte dieselbe Datei schreiben.
 
@@ -176,7 +177,7 @@ Aus „Erledigt“ endgültig löschen: Inhalte (`title`, `patientId`) werden ge
 - Ablauf: Weiterleitung (Redirect) auf `accounts.google.com/o/oauth2/v2/auth` mit `response_type=token`, zufälligem `state`; nach Rückkehr wird der Fragment-Teil der URL sofort ausgelesen und per `history.replaceState` entfernt. Bei Erneuerung `prompt=none` (keine Oberfläche, wenn Sitzung und Zustimmung bestehen).
 - Grund für Redirect statt Popup: ein Code-Pfad für PC und iPhone, keine Popup-Blocker, keine Probleme mit abgetrennter `window.opener`-Verbindung; im iPhone-Home-Bildschirm-Modus voraussichtlich robuster als Popups (muss getestet werden).
 - Token: nur im Speicher bzw. `sessionStorage`, Laufzeit ca. 1 Stunde, kein Refresh-Token (ohne eigenen Server nicht möglich).
-- Keine automatische Weiterleitung beim Start (sonst Datenverlustgefahr bei laufender Eingabe und Fehlseiten bei blockiertem Netz). Abgelaufenes Token → Status „Zum Synchronisieren einmal anmelden“; Klick → Weiterleitung, Rückkehr in die App.
+- Automatische stille Anmeldung (prompt=none) nur beim Öffnen bzw. Zurückkehren in die App und nur, wenn: Synchronisation eingerichtet, online, Google erreichbar (Vorabprüfung), keine Eingabe/kein Dialog offen, letzter Versuch > 2 Minuten her, in diesem Fenster kein stiller Fehlschlag. Eingaben werden vorher gespeichert (Entwurf, Bearbeitung). Scheitert die stille Anmeldung, erscheint ein Hinweis mit „Mit Google anmelden“ – keine Wiederholungsschleife. Abschaltbar in den Einstellungen.
 - Veröffentlichungsstatus des Projekts: „In Produktion“. Im Status „Testen“ verfallen Autorisierungen nach 7 Tagen.
 
 Einordnung des Verfahrens: Google bezeichnet den direkten Implicit-Flow als Altverfahren und empfiehlt für Browser-Apps den Authorization-Code-Flow – der bei Google für Web-Clients nach meinem Kenntnisstand aber einen Server mit Client-Secret erfordert. Risiko Token-Abgriff wird begrenzt durch: strikte CSP, keinen fremden Code, minimale Berechtigung (nur eigener App-Ordner), kurze Laufzeit, Ende-zu-Ende-Verschlüsselung (ein abgegriffenes Token gibt nur Zugriff auf verschlüsselte Daten). Ausbauoption bei Bedarf: kleiner Token-Dienst (z. B. Cloudflare Worker) für Refresh-Tokens → Synchronisation ohne stündliche Anmeldung, aber zusätzliche Komponente mit Geheimnis.

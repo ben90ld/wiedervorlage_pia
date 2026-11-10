@@ -2,7 +2,7 @@
 (function (root) {
   'use strict';
   var WV = root.WV = root.WV || {};
-  WV.VERSION = '0.2.1';
+  WV.VERSION = '0.4.0';
   WV.SCHEMA = 1;
 
   var u = WV.util = {};
