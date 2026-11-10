@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="de" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src https://www.googleapis.com; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<title>Verbindungstest</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="wrap top-inner">
+      <h1 class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Verbindungstest Google Drive</span></h1>
+    </div>
+  </header>
+  <div class="wrap">
+    <section class="card quick">
+      <p>Dieser Test prüft die Anmeldung bei Google und den Zugriff auf den versteckten App-Ordner in Google Drive.
+        Dabei wird eine kleine Testdatei <strong>ohne Inhalte aus der Wiedervorlage</strong> geschrieben, gelesen, geändert und wieder gelöscht.
+        Die App erhält nur Zugriff auf ihren eigenen App-Ordner, nicht auf deine übrigen Drive-Dateien.</p>
+      <div class="card inner" id="env"></div>
+      <div class="btn-row">
+        <button type="button" class="btn primary" id="btnLogin">Mit Google anmelden und testen</button>
+        <button type="button" class="btn" id="btnSilent">Erneuerung ohne Rückfrage testen</button>
+      </div>
+      <p class="muted">Beim ersten Mal zeigt Google eine Zustimmungsseite für „Wiedervorlage“. Den zweiten Knopf bitte erst nach einem erfolgreichen ersten Test verwenden – er prüft, ob eine spätere Anmeldung ohne erneute Bestätigung durchläuft.</p>
+    </section>
+    <section class="card quick" aria-live="polite">
+      <h2 class="sec-head">Ergebnis</h2>
+      <ul class="plain" id="results"><li class="muted">Noch kein Test durchgeführt.</li></ul>
+      <div class="btn-row">
+        <button type="button" class="btn" id="btnCopy" hidden>Ergebnis kopieren</button>
+        <a class="btn link" href="./">Zurück zur Wiedervorlage</a>
+      </div>
+      <textarea id="summary" rows="10" readonly hidden aria-label="Ergebnis zum Kopieren"></textarea>
+    </section>
+  </div>
+</div>
+<script src="config.js"></script>
+<script src="verbindungstest.js"></script>
+</body>
+</html>
