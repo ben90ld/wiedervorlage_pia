@@ -3,5 +3,5 @@
  * öffentlich (sie steht in jeder Anmelde-URL). Ein Client-Secret wird nicht verwendet.
  */
 self.WV_CONFIG = {
-  googleClientId: ''
+  googleClientId: '384221627813-1iqsqjsgd2p4f10m9tmgbaod3i75am81.apps.googleusercontent.com'
 };
