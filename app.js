@@ -1,11 +1,11 @@
-/*! Wiedervorlage 0.2.1 – erzeugt aus src/ (00-base.js, 10-dates.js, 20-model.js, 30-merge.js, 40-crypto.js, 45-format.js, 50-db.js, 60-backup.js, 70-icons.js, 80-ui.js, 90-main.js) */
+/*! Wiedervorlage 0.4.0 – erzeugt aus src/ (00-base.js, 10-dates.js, 20-model.js, 30-merge.js, 40-crypto.js, 45-format.js, 50-db.js, 55-auth.js, 56-drive.js, 60-backup.js, 65-sync.js, 70-icons.js, 80-ui.js, 90-main.js) */
 
 /* ---- 00-base.js ---- */
 /* Wiedervorlage – Basis und Hilfsfunktionen */
 (function (root) {
   'use strict';
   var WV = root.WV = root.WV || {};
-  WV.VERSION = '0.2.1';
+  WV.VERSION = '0.4.0';
   WV.SCHEMA = 1;
 
   var u = WV.util = {};
@@ -914,14 +914,17 @@
     return JSON.stringify([h.format, h.formatVersion, h.createdAt, h.key.keyId, h.payload.compression]);
   };
 
-  F.encode = async function (payload, key, keyInfo) {
+  F.SYNC_FORMAT = 'wiedervorlage-sync';
+
+  // fmt: Dateiart ('wiedervorlage-backup' oder 'wiedervorlage-sync'); fließt in die Zusatzdaten ein
+  F.encode = async function (payload, key, keyInfo, fmt) {
     var text = JSON.stringify(payload);
     var hash = await C.sha256Hex(text);
     var bytes = C.encodeText(text);
     var compression = 'none';
     if (C.canCompress()) { bytes = await C.gzip(bytes); compression = 'gzip'; }
     var header = {
-      format: F.FORMAT, formatVersion: F.VERSION, appVersion: WV.VERSION, createdAt: D.isoNow(),
+      format: fmt || F.FORMAT, formatVersion: F.VERSION, appVersion: WV.VERSION, createdAt: D.isoNow(),
       key: keyInfo, payload: { alg: 'AES-GCM', compression: compression, iv: '', data: '' }
     };
     var sealed = await C.seal(key, bytes, F.aad(header));
@@ -931,10 +934,10 @@
   };
 
   // Prüft die äußere Struktur, ohne zu entschlüsseln
-  F.parse = function (text) {
+  F.parse = function (text, fmt) {
     var h;
     try { h = JSON.parse(text); } catch (e) { throw fail('FORMAT', 'Die Datei ist keine gültige Sicherung (kein JSON).'); }
-    if (!h || h.format !== F.FORMAT) throw fail('FORMAT', 'Die Datei ist keine Wiedervorlage-Sicherung.');
+    if (!h || h.format !== (fmt || F.FORMAT)) throw fail('FORMAT', 'Die Datei ist keine Wiedervorlage-Sicherung.');
     if (typeof h.formatVersion !== 'number') throw fail('FORMAT', 'Formatversion fehlt.');
     if (h.formatVersion > F.VERSION) throw fail('NEWER', 'Die Sicherung stammt aus einer neueren Programmversion. Bitte zuerst die App aktualisieren.');
     if (!C.validKeyInfo(h.key)) throw fail('FORMAT', 'Schlüsselangaben der Sicherung sind unvollständig.');
@@ -1004,7 +1007,11 @@
   };
 
   F.sanitize = function (p) {
-    var out = { schema: p.schema, exportedAt: p.exportedAt || null, sourceDevice: p.sourceDevice || null, tasks: [], patients: [], local: [], skipped: 0 };
+    var dev = null;
+    if (isObj(p.device) && typeof p.device.id === 'string') {
+      dev = { id: p.device.id.slice(0, 32), label: typeof p.device.label === 'string' ? p.device.label.slice(0, 40) : '' };
+    }
+    var out = { schema: p.schema, exportedAt: p.exportedAt || null, sourceDevice: p.sourceDevice || null, device: dev, tasks: [], patients: [], local: [], skipped: 0 };
     (Array.isArray(p.tasks) ? p.tasks : []).forEach(function (r) {
       if (F.validTask(r)) { if (!r.cf) r.cf = {}; out.tasks.push(r); } else out.skipped++;
     });
@@ -1236,6 +1243,203 @@
       }
     } catch (e) { /* nicht verfügbar */ }
     return Promise.resolve(null);
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : self);
+
+/* ---- 55-auth.js ---- */
+/* Wiedervorlage – Google-Anmeldung (OAuth 2.0, Weiterleitung, nur drive.appdata)
+ * - Zugriffstoken (ca. 1 Stunde gültig) nur in sessionStorage dieses Fensters, nie in der Adresszeile
+ *   (Fragment wird sofort entfernt), nie in Protokollen.
+ * - Erneuerung ohne Rückfrage per prompt=none; Schleifenschutz bei wiederholten Fehlschlägen.
+ */
+(function (root) {
+  'use strict';
+  var WV = root.WV, D = WV.dates, u = WV.util;
+  var A = WV.auth = {};
+  A.SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
+  A.ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
+  var TOKEN_KEY = 'wv-token', STATE_KEY = 'wv-oauth-state', LAST_TRY_KEY = 'wv-auth-last', SILENT_FAIL_KEY = 'wv-auth-silentfail';
+  var memToken = null;
+
+  function ss() { try { return root.sessionStorage; } catch (e) { return null; } }
+  function ls() { try { return root.localStorage; } catch (e) { return null; } }
+
+  A.clientId = function () { return (root.WV_CONFIG && root.WV_CONFIG.googleClientId) || ''; };
+  // Nur in der gehosteten Fassung (HTTPS) bzw. lokal zum Testen; nicht als file://
+  A.available = function () {
+    if (!A.clientId()) return false;
+    return root.location.protocol === 'https:' || /^(localhost|127\.0\.0\.1)$/.test(root.location.hostname);
+  };
+  A.redirectUri = function () { return new URL('./', root.location.href).href.split('#')[0].split('?')[0]; };
+
+  A.token = function () {
+    var t = memToken;
+    if (!t) { try { t = JSON.parse((ss() && ss().getItem(TOKEN_KEY)) || 'null'); } catch (e) { t = null; } }
+    if (!t || !t.v || !t.exp) return null;
+    if (D.now().getTime() > t.exp - 120000) return null; // 2 Minuten Sicherheitsabstand
+    memToken = t;
+    return t.v;
+  };
+  A.expiresAt = function () {
+    var t = memToken;
+    if (!t) { try { t = JSON.parse((ss() && ss().getItem(TOKEN_KEY)) || 'null'); } catch (e) { t = null; } }
+    return t && t.exp ? t.exp : null;
+  };
+  A.invalidate = function () {
+    memToken = null;
+    try { if (ss()) ss().removeItem(TOKEN_KEY); } catch (e) { /* ignorieren */ }
+  };
+
+  // Weiterleitung zu Google. prompt: 'none' (still), 'select_account' (Auswahl), 'consent'
+  A.start = function (prompt, purpose) {
+    var state = u.hex(u.randomBytes(16));
+    try {
+      if (ss()) ss().setItem(STATE_KEY, JSON.stringify({ s: state, p: prompt || '', purpose: purpose || '' }));
+      if (ls()) ls().setItem(STATE_KEY, JSON.stringify({ s: state, p: prompt || '', purpose: purpose || '' }));
+      if (ls()) ls().setItem(LAST_TRY_KEY, String(D.now().getTime()));
+    } catch (e) { /* ohne Speicher keine Prüfung möglich → Rückkehr wird abgewiesen */ }
+    var p = new URLSearchParams({
+      client_id: A.clientId(), redirect_uri: A.redirectUri(), response_type: 'token',
+      scope: A.SCOPE, state: state, include_granted_scopes: 'false'
+    });
+    if (prompt) p.set('prompt', prompt);
+    root.location.assign(A.ENDPOINT + '?' + p.toString());
+  };
+
+  // Beim Start aufrufen: liest die Rückkehr von Google, entfernt das Fragment sofort aus der Adresszeile.
+  // Rückgabe: null | { ok:true, purpose } | { error, prompt, purpose }
+  A.handleReturn = function () {
+    var hash = root.location.hash;
+    if (!hash || hash.length < 2 || !/(access_token|error)=/.test(hash)) return null;
+    var h = new URLSearchParams(hash.slice(1));
+    try { root.history.replaceState(null, '', root.location.pathname + root.location.search); } catch (e) { root.location.hash = ''; }
+    var saved = null;
+    try {
+      saved = JSON.parse((ss() && ss().getItem(STATE_KEY)) || (ls() && ls().getItem(STATE_KEY)) || 'null');
+      if (ss()) ss().removeItem(STATE_KEY);
+      if (ls()) ls().removeItem(STATE_KEY);
+    } catch (e) { saved = null; }
+    var prompt = saved ? saved.p : '', purpose = saved ? saved.purpose : '';
+    if (!saved || h.get('state') !== saved.s) return { error: 'state_mismatch', prompt: prompt, purpose: purpose };
+    if (h.get('error')) {
+      if (prompt === 'none') { try { if (ss()) ss().setItem(SILENT_FAIL_KEY, h.get('error')); } catch (e) { /* ignorieren */ } }
+      return { error: h.get('error'), prompt: prompt, purpose: purpose };
+    }
+    var scopes = (h.get('scope') || '').split(' ');
+    if (scopes.indexOf(A.SCOPE) < 0) return { error: 'scope_missing', prompt: prompt, purpose: purpose };
+    var tok = h.get('access_token');
+    if (!tok) return { error: 'no_token', prompt: prompt, purpose: purpose };
+    var exp = D.now().getTime() + Math.max(60, Number(h.get('expires_in') || 3600)) * 1000;
+    memToken = { v: tok, exp: exp };
+    try {
+      if (ss()) { ss().setItem(TOKEN_KEY, JSON.stringify(memToken)); ss().removeItem(SILENT_FAIL_KEY); }
+    } catch (e) { /* Token nur im Arbeitsspeicher */ }
+    return { ok: true, prompt: prompt, purpose: purpose };
+  };
+
+  // Darf jetzt automatisch (still) verbunden werden? Schleifenschutz: höchstens alle 2 Minuten,
+  // nach einem stillen Fehlschlag in diesem Fenster nicht erneut.
+  A.mayAutoConnect = function () {
+    try {
+      if (ss() && ss().getItem(SILENT_FAIL_KEY)) return false;
+      var last = Number((ls() && ls().getItem(LAST_TRY_KEY)) || 0);
+      if (last && D.now().getTime() - last < 120000) return false;
+    } catch (e) { return false; }
+    return true;
+  };
+  A.silentFailed = function () { try { return (ss() && ss().getItem(SILENT_FAIL_KEY)) || null; } catch (e) { return null; } };
+
+  A.errorText = function (code) {
+    var map = {
+      access_denied: 'Google-Zugriff wurde nicht erlaubt.',
+      interaction_required: 'Google möchte die Anmeldung bestätigen.',
+      login_required: 'Bei Google nicht angemeldet.',
+      consent_required: 'Google möchte die Freigabe erneut bestätigen.',
+      account_selection_required: 'Bitte das Google-Konto auswählen.',
+      state_mismatch: 'Die Rückkehr von Google passte nicht zur Anmeldung. Bitte erneut versuchen.',
+      scope_missing: 'Die nötige Berechtigung (App-Ordner) wurde nicht erteilt.',
+      no_token: 'Von Google kam kein Zugriffsschlüssel.'
+    };
+    return map[code] || ('Anmeldung fehlgeschlagen (' + String(code).slice(0, 40) + ').');
+  };
+
+  // Erreichbarkeit von Google prüfen, ohne Daten zu senden (opake Antwort genügt)
+  A.probe = function (ms) {
+    return new Promise(function (resolve) {
+      var done = false;
+      var timer = setTimeout(function () { if (!done) { done = true; resolve(false); } }, ms || 3000);
+      try {
+        fetch('https://www.googleapis.com/drive/v3/about?fields=kind', { mode: 'no-cors', cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' })
+          .then(function () { if (!done) { done = true; clearTimeout(timer); resolve(true); } },
+            function () { if (!done) { done = true; clearTimeout(timer); resolve(false); } });
+      } catch (e) { if (!done) { done = true; clearTimeout(timer); resolve(false); } }
+    });
+  };
+})(typeof globalThis !== 'undefined' ? globalThis : self);
+
+/* ---- 56-drive.js ---- */
+/* Wiedervorlage – Google Drive API v3, nur App-Ordner (appDataFolder)
+ * Übertragen werden ausschließlich verschlüsselte Inhalte und technische Dateinamen.
+ */
+(function (root) {
+  'use strict';
+  var WV = root.WV, u = WV.util;
+  var G = WV.drive = {};
+  var API = 'https://www.googleapis.com';
+  G.FIELDS = 'id,name,version,createdTime,modifiedTime,size';
+
+  function fail(code, msg, status) { var e = new Error(msg); e.code = code; e.status = status || 0; return e; }
+
+  async function call(token, method, path, body, contentType) {
+    var headers = { Authorization: 'Bearer ' + token };
+    if (contentType) headers['Content-Type'] = contentType;
+    var res;
+    try {
+      res = await fetch(API + path, { method: method, headers: headers, body: body, cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' });
+    } catch (e) {
+      throw fail('NETWORK', 'Keine Verbindung zu Google Drive.');
+    }
+    if (res.status === 204) return '';
+    var text = await res.text();
+    if (!res.ok) {
+      if (res.status === 401) throw fail('AUTH', 'Google-Anmeldung abgelaufen.', 401);
+      if (res.status === 404) throw fail('NOTFOUND', 'Datei in Google Drive nicht gefunden.', 404);
+      if (res.status === 403 || res.status === 429) throw fail('RATE', 'Google Drive lehnt die Anfrage vorübergehend ab.', res.status);
+      if (res.status >= 500) throw fail('SERVER', 'Google Drive ist vorübergehend nicht erreichbar.', res.status);
+      throw fail('HTTP', 'Google Drive meldet einen Fehler (' + res.status + ').', res.status);
+    }
+    return text;
+  }
+
+  G.list = async function (token) {
+    var files = [], pageToken = '';
+    do {
+      var q = '/drive/v3/files?spaces=appDataFolder&pageSize=100&fields=nextPageToken,files(' + G.FIELDS + ')' + (pageToken ? '&pageToken=' + encodeURIComponent(pageToken) : '');
+      var r = JSON.parse(await call(token, 'GET', q));
+      files = files.concat(r.files || []);
+      pageToken = r.nextPageToken || '';
+    } while (pageToken);
+    return files;
+  };
+
+  G.download = function (token, id) {
+    return call(token, 'GET', '/drive/v3/files/' + encodeURIComponent(id) + '?alt=media');
+  };
+
+  G.create = async function (token, name, text) {
+    var boundary = 'wv' + u.hex(u.randomBytes(8));
+    var meta = JSON.stringify({ name: name, parents: ['appDataFolder'] });
+    var body = '--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + meta + '\r\n--' + boundary +
+      '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + text + '\r\n--' + boundary + '--';
+    return JSON.parse(await call(token, 'POST', '/upload/drive/v3/files?uploadType=multipart&fields=' + G.FIELDS, body, 'multipart/related; boundary=' + boundary));
+  };
+
+  G.update = async function (token, id, text) {
+    return JSON.parse(await call(token, 'PATCH', '/upload/drive/v3/files/' + encodeURIComponent(id) + '?uploadType=media&fields=' + G.FIELDS, text, 'application/json; charset=UTF-8'));
+  };
+
+  G.remove = function (token, id) {
+    return call(token, 'DELETE', '/drive/v3/files/' + encodeURIComponent(id));
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);
 
@@ -1578,6 +1782,332 @@
   };
 })(typeof globalThis !== 'undefined' ? globalThis : self);
 
+/* ---- 65-sync.js ---- */
+/* Wiedervorlage – Synchronisation über den App-Ordner in Google Drive
+ *
+ * Ablage (alle Inhalte Ende-zu-Ende-verschlüsselt, nur Dateinamen/Größe/Zeitpunkte für Google sichtbar):
+ *   wv-keys.json          Salt, Iterationen, mit der Passphrase verpackter Datenschlüssel (kein Klartext-Inhalt)
+ *   wv-dev-<gerät>.json   vollständiger, verschlüsselter Stand eines Geräts – ohne Notizen/lokale Felder
+ * Jedes Gerät schreibt nur seine eigene Datei und liest die der anderen. Dadurch kann kein Upload eines
+ * Geräts die Daten eines anderen überschreiben. Zusammengeführt wird lokal, feldweise (siehe 30-merge.js).
+ */
+(function (root) {
+  'use strict';
+  var WV = root.WV, D = WV.dates, F = WV.format, C = WV.crypto, DB = WV.db, G = WV.drive, A = WV.auth, Ctl = WV.backupCtl, M = WV.model;
+  var S = WV.sync = {};
+  S.KEYS_NAME = 'wv-keys.json';
+  S.KEYS_FORMAT = 'wiedervorlage-keys';
+  S.DEV_RE = /^wv-dev-([a-z0-9]{6,24})\.json$/;
+  S.UPLOAD_DELAY = 4000;
+  S.PERIOD = 5 * 60 * 1000;
+  S.onStatus = null;   // Statusänderung
+  S.onMerged = null;   // fremde Änderungen übernommen
+  S.onNeedKey = null;  // Passphrase der Synchronisation nötig
+
+  var st = S.st = { cfg: null, deviceId: null, running: false, again: false, needKey: null, skipped: 0 };
+
+  function fail(code, msg) { var e = new Error(msg); e.code = code; return e; }
+  function emit() { if (S.onStatus) S.onStatus(); }
+
+  S.devName = function (id) { return 'wv-dev-' + id + '.json'; };
+
+  S.deviceLabel = function () {
+    var ua = root.navigator.userAgent;
+    if (/iPhone/.test(ua)) return 'iPhone';
+    if (/iPad/.test(ua) || (root.navigator.platform === 'MacIntel' && root.navigator.maxTouchPoints > 1)) return 'iPad';
+    if (/Android/.test(ua)) return 'Android-Gerät';
+    if (/Windows/.test(ua)) return 'Windows-PC';
+    if (/Mac/.test(ua)) return 'Mac';
+    return 'Gerät';
+  };
+
+  S.init = async function () {
+    st.cfg = (await DB.getMeta('sync')) || null;
+    var dev = await DB.getMeta('device');
+    st.deviceId = dev ? dev.id : null;
+    emit();
+  };
+
+  async function saveCfg() { await DB.setMeta('sync', st.cfg); }
+  async function reloadCfg() { st.cfg = (await DB.getMeta('sync')) || st.cfg; }
+
+  S.enabled = function () { return !!(st.cfg && st.cfg.enabled); };
+  S.cfg = function () { return st.cfg || {}; };
+  S.pending = function () { return S.enabled() && Ctl.changeSeq > (st.cfg.uploadedSeq || 0); };
+
+  // Status für die Kopfzeile: code ok | pending | running | offline | auth | key | error | off | unavailable
+  S.status = function () {
+    if (!A.available()) return { code: 'unavailable', level: 'info', text: 'Synchronisation nur in der Online-Version' };
+    if (!S.enabled()) return { code: 'off', level: 'info', text: 'Synchronisation nicht eingerichtet' };
+    if (st.needKey) return { code: 'key', level: 'warn', text: 'Passphrase nötig' };
+    if (st.running) return { code: 'running', level: 'info', text: 'Synchronisiere …' };
+    if (!root.navigator.onLine) return { code: 'offline', level: 'info', text: S.pending() ? 'Offline – Änderungen warten' : 'Offline' };
+    var c = st.cfg;
+    if (c.lastError && c.lastError.code !== 'AUTH') return { code: 'error', level: 'error', text: 'Synchronisation fehlgeschlagen' };
+    if (!A.token()) return { code: 'auth', level: S.pending() ? 'warn' : 'info', text: S.pending() ? 'Änderungen warten – verbinden' : 'Mit Google verbinden' };
+    if (S.pending()) return { code: 'pending', level: 'info', text: 'Änderungen warten auf Übertragung' };
+    return { code: 'ok', level: 'ok', text: c.lastSyncAt ? 'Synchronisiert ' + D.fmtDateTime(c.lastSyncAt).slice(-5) : 'Verbunden' };
+  };
+
+  // ---------- Schlüsseldatei ----------
+  S.keysText = function (info) {
+    return JSON.stringify({ format: S.KEYS_FORMAT, formatVersion: 1, createdAt: D.isoNow(), key: info });
+  };
+  S.parseKeys = function (text) {
+    var o;
+    try { o = JSON.parse(text); } catch (e) { throw fail('FORMAT', 'Schlüsseldatei in Google Drive ist beschädigt.'); }
+    if (!o || o.format !== S.KEYS_FORMAT || !C.validKeyInfo(o.key)) throw fail('FORMAT', 'Schlüsseldatei in Google Drive ist ungültig.');
+    return o.key;
+  };
+  function byCreated(a, b) {
+    var x = a.createdTime || '', y = b.createdTime || '';
+    return x < y ? -1 : (x > y ? 1 : (a.id < b.id ? -1 : 1));
+  }
+
+  // ---------- Stand dieses Geräts (ohne lokale Felder) ----------
+  S.snapshot = async function () {
+    var all = await DB.loadAll();
+    var body = { tasks: all.tasks, patients: all.patients };
+    return {
+      seq: all.meta.changeSeq || 0,
+      hash: await C.sha256Hex(JSON.stringify(body)),
+      payload: {
+        schema: WV.SCHEMA, exportedAt: D.isoNow(), sourceDevice: st.deviceId,
+        device: { id: st.deviceId, label: S.deviceLabel() },
+        tasks: all.tasks, patients: all.patients
+      }
+    };
+  };
+
+  // Fremden Stand einmischen – lokale Felder (Notizen) werden nie angefasst
+  S.applyRemote = async function (payload) {
+    var ids = {
+      tasks: payload.tasks.map(function (t) { return t.id; }),
+      patients: payload.patients.map(function (p) { return p.id; })
+    };
+    var stats = null, changed = false;
+    var out = await DB.mutate(ids, function (cur) {
+      var toMap = function (o) { var m = new Map(); Object.keys(o).forEach(function (k) { if (o[k]) m.set(k, o[k]); }); return m; };
+      var res = WV.merge.mergeSets({ tasks: toMap(cur.tasks), patients: toMap(cur.patients), local: new Map() },
+        { tasks: payload.tasks, patients: payload.patients, local: [] }, false);
+      stats = res.stats;
+      changed = res.tasks.length + res.patients.length > 0;
+      return { tasks: res.tasks, patients: res.patients, local: [], dirty: changed, stamp: false };
+    });
+    if (out && typeof out.changeSeq === 'number') Ctl.noteChange(out.changeSeq);
+    return { stats: stats, changed: changed };
+  };
+
+  function withLock(fn) {
+    if (root.navigator.locks && typeof root.navigator.locks.request === 'function') {
+      return root.navigator.locks.request('wiedervorlage-sync', fn);
+    }
+    return fn();
+  }
+
+  // ---------- Ein Abgleich ----------
+  async function run(token) {
+    await reloadCfg();
+    var cfg = st.cfg;
+    var files = await G.list(token);
+
+    // 1. Schlüssel abgleichen
+    var keyFiles = files.filter(function (f) { return f.name === S.KEYS_NAME; }).sort(byCreated);
+    if (cfg.keyPendingUpload || !keyFiles.length) {
+      if (keyFiles.length) await G.update(token, keyFiles[0].id, S.keysText(Ctl.keyInfo));
+      else keyFiles = [await G.create(token, S.KEYS_NAME, S.keysText(Ctl.keyInfo))];
+      cfg.keyPendingUpload = false;
+      cfg.keysFileId = keyFiles[0].id;
+      cfg.uploadedHash = null; // eigene Datei mit aktuellem Schlüssel neu schreiben
+    } else {
+      var kf = keyFiles[0];
+      if (cfg.keysFileId !== kf.id || cfg.keysVersion !== kf.version || cfg.keysKeyId !== Ctl.keyInfo.keyId) {
+        var info = S.parseKeys(await G.download(token, kf.id));
+        if (info.keyId !== Ctl.keyInfo.keyId) {
+          st.needKey = { info: info };
+          if (S.onNeedKey) S.onNeedKey(st.needKey);
+          throw fail('KEY', 'In Google Drive gilt eine andere Passphrase.');
+        }
+        cfg.keysFileId = kf.id; cfg.keysVersion = kf.version; cfg.keysKeyId = info.keyId;
+      }
+      for (var i = 1; i < keyFiles.length; i++) { try { await G.remove(token, keyFiles[i].id); } catch (e) { /* nicht kritisch */ } }
+    }
+
+    // 2. Stände der anderen Geräte einlesen
+    var seen = cfg.seen || {}, others = cfg.others || {};
+    var stats = { tasksNew: 0, tasksUpdated: 0, conflicts: 0, files: 0 };
+    var own = null, ownDupes = [], present = {};
+    st.skipped = 0;
+    for (var j = 0; j < files.length; j++) {
+      var f = files[j];
+      var m = S.DEV_RE.exec(f.name);
+      if (!m) continue;
+      present[f.id] = true;
+      if (m[1] === st.deviceId) {
+        if (!own) own = f;
+        else if (f.id === cfg.ownFileId) { ownDupes.push(own); own = f; }
+        else ownDupes.push(f);
+        continue;
+      }
+      if (seen[f.id] === f.version) continue;
+      var text = await G.download(token, f.id);
+      var h;
+      try { h = F.parse(text, F.SYNC_FORMAT); } catch (e) { st.skipped++; continue; }
+      if (h.key.keyId !== Ctl.keyInfo.keyId) { st.skipped++; continue; } // Gerät mit älterem Schlüssel – später erneut
+      var dec = await F.decrypt(h, Ctl.key);
+      var r = await S.applyRemote(dec.payload);
+      stats.tasksNew += r.stats.tasksNew; stats.tasksUpdated += r.stats.tasksUpdated; stats.conflicts += r.stats.conflicts; stats.files++;
+      seen[f.id] = f.version;
+      var dp = dec.payload.device || {};
+      others[m[1]] = { label: dp.label || 'anderes Gerät', exportedAt: dec.payload.exportedAt || null, at: D.isoNow() };
+    }
+    Object.keys(seen).forEach(function (id) { if (!present[id]) delete seen[id]; });
+
+    // 3. Eigenen Stand hochladen, wenn er sich geändert hat
+    var snap = await S.snapshot();
+    if (!own || snap.hash !== cfg.uploadedHash || own.version !== cfg.ownVersion) {
+      var enc = await F.encode(snap.payload, Ctl.key, Ctl.keyInfo, F.SYNC_FORMAT);
+      var meta;
+      if (own) {
+        try { meta = await G.update(token, own.id, enc.text); }
+        catch (e) { if (e.code === 'NOTFOUND') meta = await G.create(token, S.devName(st.deviceId), enc.text); else throw e; }
+      } else {
+        meta = await G.create(token, S.devName(st.deviceId), enc.text);
+      }
+      cfg.ownFileId = meta.id; cfg.ownVersion = meta.version; cfg.uploadedHash = snap.hash;
+    }
+    for (var k = 0; k < ownDupes.length; k++) { try { await G.remove(token, ownDupes[k].id); } catch (e) { /* nicht kritisch */ } }
+    cfg.uploadedSeq = Math.max(cfg.uploadedSeq || 0, snap.seq);
+    cfg.seen = seen; cfg.others = others;
+    cfg.lastSyncAt = D.isoNow();
+    cfg.lastError = null;
+    await saveCfg();
+    return stats;
+  }
+
+  // Öffentlicher Abgleich. Läuft bereits einer, wird danach genau ein weiterer angehängt
+  // (der Aufrufer erhält dessen Ergebnis). Rückgabe: { ok, code?, message?, stats? }
+  var current = null, next = null;
+  S.syncNow = function () {
+    if (current) {
+      if (!next) next = current.then(function () { next = null; return S.syncNow(); });
+      return next;
+    }
+    current = doSync();
+    current.then(function () { current = null; }, function () { current = null; });
+    return current;
+  };
+
+  async function doSync() {
+    if (!S.enabled()) return { ok: false, code: 'off' };
+    if (st.needKey) { emit(); return { ok: false, code: 'KEY' }; }
+    if (!root.navigator.onLine) { emit(); return { ok: false, code: 'offline' }; }
+    var token = A.token();
+    if (!token) { emit(); return { ok: false, code: 'auth' }; }
+    if (!Ctl.key || !Ctl.keyInfo) { st.needKey = { info: null }; emit(); return { ok: false, code: 'KEY' }; }
+    st.running = true; emit();
+    try {
+      var stats = await withLock(function () { return run(token); });
+      // Oberfläche aktualisieren, bevor der Abgleich als abgeschlossen gilt
+      if (stats.files && (stats.tasksNew || stats.tasksUpdated || stats.conflicts) && S.onMerged) await S.onMerged(stats);
+      return { ok: true, stats: stats };
+    } catch (e) {
+      if (e.code === 'AUTH') A.invalidate();
+      await reloadCfg();
+      if (e.code !== 'KEY') {
+        st.cfg.lastError = { code: e.code || 'ERR', message: e.code === 'AUTH' ? 'Google-Anmeldung abgelaufen.' : (e.message || 'Unbekannter Fehler'), at: D.isoNow() };
+        await saveCfg();
+      }
+      return { ok: false, code: e.code || 'ERR', message: e.message };
+    } finally {
+      st.running = false;
+      emit();
+    }
+  }
+
+  var timer = null;
+  S.schedule = function (ms) {
+    if (!S.enabled()) return;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(function () { timer = null; S.syncNow(); }, ms === undefined ? S.UPLOAD_DELAY : ms);
+  };
+  S.noteChange = function () { if (S.enabled() && A.token()) S.schedule(); else emit(); };
+
+  // ---------- Einrichtung ----------
+  S.beginSetup = function () { A.start('select_account', 'setup'); };
+
+  // Nach der Rückkehr von Google: Rückgabe { done } | { need:'create' } | { need:'unlock', info, hadLocalKey }
+  S.continueSetup = async function () {
+    var token = A.token();
+    if (!token) throw fail('AUTH', 'Google-Anmeldung fehlt.');
+    var files = await G.list(token);
+    var keyFiles = files.filter(function (f) { return f.name === S.KEYS_NAME; }).sort(byCreated);
+    if (keyFiles.length) {
+      var info = S.parseKeys(await G.download(token, keyFiles[0].id));
+      if (Ctl.keyInfo && Ctl.keyInfo.keyId === info.keyId && Ctl.key) {
+        await S.enable();
+        return { done: true };
+      }
+      return { need: 'unlock', info: info, hadLocalKey: !!Ctl.key };
+    }
+    if (Ctl.key && Ctl.keyInfo) {
+      await S.enable({ keyPendingUpload: true });
+      return { done: true, usedExisting: true };
+    }
+    return { need: 'create' };
+  };
+
+  S.enable = async function (extra) {
+    st.cfg = Object.assign({
+      enabled: true, setupAt: D.isoNow(), autoConnect: true, uploadedSeq: 0, uploadedHash: null,
+      seen: {}, others: {}, lastSyncAt: null, lastError: null, keyPendingUpload: false
+    }, st.cfg && !st.cfg.enabled ? { autoConnect: st.cfg.autoConnect !== false } : {}, extra || {});
+    st.needKey = null;
+    await saveCfg();
+    emit();
+  };
+
+  S.disable = async function () {
+    if (!st.cfg) return;
+    st.cfg.enabled = false;
+    await saveCfg();
+    A.invalidate();
+    emit();
+  };
+
+  S.setAutoConnect = async function (on) {
+    if (!st.cfg) return;
+    st.cfg.autoConnect = !!on;
+    await saveCfg();
+  };
+
+  // Passphrase eines anderen Geräts übernehmen (Schlüssel aus Google Drive)
+  S.unlockWith = async function (pass, info) {
+    var key = await C.unlock(info, pass); // wirft WRONG_PASSPHRASE
+    await Ctl.adoptKey(info, key);
+    // Sicherungen künftig mit diesem Schlüssel: frische Sicherung erzwingen
+    Ctl.bs = await DB.updateMeta('backupState', function (bs) { bs = bs || {}; bs.lastOkSeq = 0; bs.lastDatedDay = null; return bs; });
+    if (!S.enabled()) await S.enable();
+    st.cfg.keysKeyId = info.keyId; st.cfg.keysVersion = null; st.cfg.uploadedHash = null; st.cfg.seen = {};
+    st.needKey = null;
+    await saveCfg();
+    emit();
+    Ctl.noteChange();
+  };
+
+  // Nach "Neue Passphrase festlegen" auf diesem Gerät: Schlüsseldatei ersetzen, alles neu verschlüsseln
+  S.onKeyChanged = async function () {
+    if (!S.enabled()) return;
+    st.cfg.keyPendingUpload = true; st.cfg.uploadedHash = null; st.cfg.seen = {};
+    st.needKey = null;
+    await saveCfg();
+    emit();
+  };
+
+  S.needKey = function () { return st.needKey; };
+  S.skipped = function () { return st.skipped; };
+})(typeof globalThis !== 'undefined' ? globalThis : self);
+
 /* ---- 70-icons.js ---- */
 /* Wiedervorlage – flache Inline-SVG-Symbole (24×24, Linien in currentColor) */
 (function (root) {
@@ -1690,7 +2220,8 @@
   var S = WV.state = {
     tasks: new Map(), patients: new Map(), local: new Map(), device: null,
     ui: loadUi(), view: null, today: null, swWaiting: null, swUpdating: false, persisted: null,
-    isFile: root.location.protocol === 'file:', fatal: null, stale: false
+    isFile: root.location.protocol === 'file:', fatal: null, stale: false,
+    isIOS: /iPhone|iPad|iPod/.test(root.navigator.userAgent) || (root.navigator.platform === 'MacIntel' && root.navigator.maxTouchPoints > 1)
   };
 
   WV.ui = {};
@@ -1737,6 +2268,7 @@
     (out.patients || []).forEach(function (r) { S.patients.set(r.id, r); });
     (out.local || []).forEach(function (r) { S.local.set(r.id, r); });
     if (typeof out.changeSeq === 'number') Ctl.noteChange(out.changeSeq);
+    if (WV.sync) WV.sync.noteChange();
     if (!persistAsked) { persistAsked = true; DB.requestPersist().then(function (p) { S.persisted = p; }); }
     return out;
   }
@@ -1888,6 +2420,10 @@
       box.appendChild(h('div', { class: 'banner info' }, [icon('download'), h('span', null, 'Eine neue Version der Wiedervorlage ist verfügbar.'),
         h('button', { type: 'button', class: 'btn small primary', onclick: applyUpdate }, 'Jetzt aktualisieren')]));
     }
+    if (S.authBanner && WV.sync && WV.sync.enabled()) {
+      box.appendChild(h('div', { class: 'banner info' }, [icon('restore'), h('span', null, S.authBanner + ' Für die Synchronisation bitte kurz anmelden.'),
+        h('button', { type: 'button', class: 'btn small primary', onclick: function () { S.authBanner = null; goGoogle('select_account', 'manual'); } }, 'Mit Google anmelden')]));
+    }
     var st = Ctl.status();
     if (st.unbackedOld && !S.ui.bannerLater) {
       box.appendChild(h('div', { class: 'banner warn' }, [icon('lock'),
@@ -1916,6 +2452,7 @@
     });
     S.view = view;
     renderCounters(view.counts);
+    if (WV.ui.renderSyncPill) WV.ui.renderSyncPill();
     renderBackupPill();
     renderBanners();
     renderFilters();
@@ -2508,7 +3045,10 @@
   }
 
   // ---------- Bearbeiten ----------
-  var E = { id: null, origRecall: null, postponeCounted: false, type: null, typeAuto: false, important: false, status: 'open', picker: null, saveTimer: null, saving: Promise.resolve() };
+  // dirty: Felder, die in diesem Fenster geändert wurden – nur diese werden gespeichert. So überschreibt
+  // ein offenes Bearbeitungsfenster keine zwischenzeitlich synchronisierten Änderungen anderer Felder.
+  var E = { id: null, origRecall: null, postponeCounted: false, type: null, typeAuto: false, important: false, status: 'open', picker: null, saveTimer: null, saving: Promise.resolve(), dirty: {} };
+  function markDirty(f) { E.dirty[f] = true; }
   var STATUS_OPTS = [['open', 'Offen'], ['done', 'Erledigt']];
 
   function setSaveState(text, cls) {
@@ -2558,19 +3098,21 @@
     });
   }
 
-  function fillEdit(t) {
-    $('eTitle').value = t.v.title;
-    E.picker.set(t.v.patientId);
-    E.type = t.v.type; E.typeAuto = !!t.v.typeAuto;
-    paintTypeChips($('eTypes'), E.type, false);
-    $('eRecall').value = t.v.recall || '';
-    $('eDeadline').value = t.v.deadline || '';
-    E.important = !!t.v.important;
-    paintToggle($('eImportant'), E.important, 'Wichtig');
-    E.status = t.v.status === 'done' ? 'done' : 'open';
-    paintSeg($('eStatus'), E.status);
+  // onlyClean: nur Felder neu füllen, die im Fenster nicht gerade geändert werden (nach Synchronisation)
+  function fillEdit(t, onlyClean) {
+    var d = onlyClean ? E.dirty : {};
+    if (!onlyClean) E.dirty = {};
+    if (!d.title) $('eTitle').value = t.v.title;
+    if (!d.patient && !(onlyClean && doc.activeElement === $('ePatient'))) E.picker.set(t.v.patientId);
+    if (!d.type) { E.type = t.v.type; E.typeAuto = !!t.v.typeAuto; paintTypeChips($('eTypes'), E.type, false); }
+    if (!d.recall) $('eRecall').value = t.v.recall || '';
+    if (!d.deadline) $('eDeadline').value = t.v.deadline || '';
+    if (!d.important) { E.important = !!t.v.important; paintToggle($('eImportant'), E.important, 'Wichtig'); }
+    if (!d.status) { E.status = t.v.status === 'done' ? 'done' : 'open'; paintSeg($('eStatus'), E.status); }
     var loc = S.local.get(t.id);
-    $('eNote').value = loc && loc.note ? loc.note : '';
+    if (!d.note) $('eNote').value = loc && loc.note ? loc.note : '';
+    $('eNoteField').hidden = S.isIOS && !(loc && loc.note);
+    $('eNoteHidden').hidden = !$('eNoteField').hidden;
     renderEditConflicts(t);
     var pc = M.postponeCount(t);
     $('eMeta').textContent = 'Erstellt ' + D.fmtDateTime(t.v.createdAt) + ' · Geändert ' + D.fmtDateTime(t.u) +
@@ -2580,7 +3122,7 @@
   function openEdit(id) {
     var t = S.tasks.get(id);
     if (!t) return;
-    E.id = id; E.origRecall = t.v.recall; E.postponeCounted = false;
+    E.id = id; E.origRecall = t.v.recall; E.postponeCounted = false; E.dirty = {};
     E.picker.reset();
     fillEdit(t);
     setSaveState('');
@@ -2589,6 +3131,12 @@
     $('eTitle').focus();
   }
   WV.ui.openEdit = openEdit;
+  // Nach Synchronisation: offenes Bearbeitungsfenster aktualisieren, ohne laufende Eingaben zu überschreiben
+  WV.ui.refreshEdit = function () {
+    if (!$('dlgEdit').open || !E.id) return;
+    var t = S.tasks.get(E.id);
+    if (t) fillEdit(t, true);
+  };
 
   function scheduleEditSave(delay) {
     if (E.saveTimer) clearTimeout(E.saveTimer);
@@ -2605,35 +3153,40 @@
     var t = S.tasks.get(id);
     if (!t) return;
     var ch = {};
+    var dirty = E.dirty;
+    var snap = { title: $('eTitle').value, patient: $('ePatient').value, recall: $('eRecall').value, deadline: $('eDeadline').value, note: $('eNote').value, type: E.type, important: E.important, status: E.status };
     var title = $('eTitle').value.trim();
-    if (!title) { setSaveState('Titel darf nicht leer sein – nicht gespeichert.', 'error'); return; }
-    if (title !== t.v.title) ch.title = title;
+    if (dirty.title) {
+      if (!title) { setSaveState('Titel darf nicht leer sein – nicht gespeichert.', 'error'); return; }
+      if (title !== t.v.title) ch.title = title;
+    }
     var ptxt = $('ePatient').value.trim();
-    if (!ptxt) { if (t.v.patientId) ch.patient = null; }
+    if (!dirty.patient) { /* unverändert */ }
+    else if (!ptxt) { if (t.v.patientId) ch.patient = null; }
     else {
       var sel = E.picker.selected || E.picker.resolve();
       if (sel && sel.id && sel.id !== t.v.patientId) ch.patient = { id: sel.id };
       else if (sel && sel.newLabel) ch.patient = { newLabel: sel.newLabel };
     }
-    if (E.type !== t.v.type) { ch.type = E.type; ch.typeAuto = false; }
+    if (dirty.type && E.type !== t.v.type) { ch.type = E.type; ch.typeAuto = false; }
     var rv = $('eRecall').value || null;
     var countPostpone = false;
-    if (rv !== (t.v.recall || null)) {
+    if (dirty.recall && rv !== (t.v.recall || null)) {
       if (rv !== null && !saneDate(rv)) { setSaveState('Wiedervorlage: bitte ein gültiges Datum eingeben.', 'error'); return; }
       ch.recall = rv;
       if (rv && !E.postponeCounted && E.origRecall && D.diff(rv, E.origRecall) > 0) { countPostpone = true; E.postponeCounted = true; }
     }
     var dv = $('eDeadline').value;
-    if ((dv || null) !== (t.v.deadline || null)) {
+    if (dirty.deadline && (dv || null) !== (t.v.deadline || null)) {
       if (dv && !saneDate(dv)) { setSaveState('Frist: bitte ein gültiges Datum eingeben.', 'error'); return; }
       ch.deadline = dv || null;
     }
-    if (E.important !== !!t.v.important) ch.important = E.important;
+    if (dirty.important && E.important !== !!t.v.important) ch.important = E.important;
     var curStatus = t.v.status === 'done' ? 'done' : 'open';
-    if (E.status !== curStatus) ch.status = E.status;
+    if (dirty.status && E.status !== curStatus) ch.status = E.status;
     var loc = S.local.get(id);
     var note = $('eNote').value;
-    var noteChanged = (note || '') !== ((loc && loc.note) || '');
+    var noteChanged = !!dirty.note && (note || '') !== ((loc && loc.note) || '');
     if (!Object.keys(ch).length && !noteChanged) { setSaveState('Gespeichert', 'ok'); return; }
     setSaveState('Speichert …');
     try {
@@ -2642,6 +3195,11 @@
         if (ch.patient && ch.patient.newLabel && out.newPatientId) E.picker.selected = { id: out.newPatientId };
       }
       if (noteChanged) await A.setLocal(id, { note: note || null });
+      // gespeicherte Felder sind nicht mehr "in Bearbeitung" (sofern seither nicht weiter getippt)
+      if (E.id === id) {
+        var cur = { title: $('eTitle').value, patient: $('ePatient').value, recall: $('eRecall').value, deadline: $('eDeadline').value, note: $('eNote').value, type: E.type, important: E.important, status: E.status };
+        Object.keys(dirty).forEach(function (k) { if (cur[k] === snap[k]) delete E.dirty[k]; });
+      }
       setSaveState('Gespeichert', 'ok');
       render();
       var nt = S.tasks.get(id);
@@ -2663,26 +3221,28 @@
   function initEdit() {
     var dlg = $('dlgEdit');
     E.picker = PatientPicker($('ePatient'), $('ePatientList'), $('ePatientHint'), {
-      onChange: function () { scheduleEditSave(0); }
+      onChange: function () { markDirty('patient'); scheduleEditSave(0); },
+      onInput: function () { markDirty('patient'); }
     });
-    buildTypeChips($('eTypes'), function (id) { E.type = id; paintTypeChips($('eTypes'), E.type, false); scheduleEditSave(0); });
+    buildTypeChips($('eTypes'), function (id) { E.type = id; markDirty('type'); paintTypeChips($('eTypes'), E.type, false); scheduleEditSave(0); });
     buildSeg($('eRecallPicks'), [['d', '+1 Tag'], ['w', '+1 Woche'], ['m', '+1 Monat']], function (unit) {
       var t = S.tasks.get(E.id);
       var base = $('eRecall').value && D.isValid($('eRecall').value) ? $('eRecall').value : (t ? t.v.recall : D.today());
       $('eRecall').value = D.postpone(base, D.today(), unit);
+      markDirty('recall');
       scheduleEditSave(0);
     }, 'small');
-    buildSeg($('eStatus'), STATUS_OPTS, function (v) { E.status = v; paintSeg($('eStatus'), v); scheduleEditSave(0); });
-    $('eImportant').addEventListener('click', function () { E.important = !E.important; paintToggle($('eImportant'), E.important, 'Wichtig'); scheduleEditSave(0); });
-    $('eTitle').addEventListener('input', function () { scheduleEditSave(); });
+    buildSeg($('eStatus'), STATUS_OPTS, function (v) { E.status = v; markDirty('status'); paintSeg($('eStatus'), v); scheduleEditSave(0); });
+    $('eImportant').addEventListener('click', function () { E.important = !E.important; markDirty('important'); paintToggle($('eImportant'), E.important, 'Wichtig'); scheduleEditSave(0); });
+    $('eTitle').addEventListener('input', function () { markDirty('title'); scheduleEditSave(); });
     $('eTitle').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); flushEdit().then(closeEdit); } });
-    $('eRecall').addEventListener('change', function () { scheduleEditSave(600); });
+    $('eRecall').addEventListener('change', function () { markDirty('recall'); scheduleEditSave(600); });
     $('eRecallClear').appendChild(icon('x'));
-    $('eRecallClear').addEventListener('click', function () { $('eRecall').value = ''; scheduleEditSave(0); });
-    $('eDeadline').addEventListener('change', function () { scheduleEditSave(600); });
+    $('eRecallClear').addEventListener('click', function () { $('eRecall').value = ''; markDirty('recall'); scheduleEditSave(0); });
+    $('eDeadline').addEventListener('change', function () { markDirty('deadline'); scheduleEditSave(600); });
     $('eDeadlineClear').appendChild(icon('x'));
-    $('eDeadlineClear').addEventListener('click', function () { $('eDeadline').value = ''; scheduleEditSave(0); });
-    $('eNote').addEventListener('input', function () { scheduleEditSave(700); });
+    $('eDeadlineClear').addEventListener('click', function () { $('eDeadline').value = ''; markDirty('deadline'); scheduleEditSave(0); });
+    $('eNote').addEventListener('input', function () { markDirty('note'); scheduleEditSave(700); });
     $('eDelete').addEventListener('click', function () {
       var id = E.id;
       flushEdit().then(function () { closeEdit(); removeTask(id); });
@@ -2792,7 +3352,7 @@
     var counts = { open: 0, done: 0, deleted: 0 };
     S.tasks.forEach(function (t) { if (t.v.purged) return; if (t.v.deleted) counts.deleted++; else if (t.v.status === 'done') counts.done++; else counts.open++; });
 
-    var body = [
+    var body = syncSection().concat([
       h('h3', null, 'Sicherung'),
       h('div', { class: 'card inner' }, statusPart),
       h('div', { class: 'card inner' }, keyPart),
@@ -2826,18 +3386,21 @@
         kv('Aufgaben', counts.open + ' offen · ' + counts.done + ' erledigt' + (counts.deleted ? ' · ' + counts.deleted + ' gelöscht (Löschmarker)' : '')),
         kv('Dauerhafter Speicher', S.persisted === true ? 'vom Browser zugesagt' : (S.persisted === false ? 'nicht zugesagt – Sicherung besonders wichtig' : 'unbekannt')),
         kv('Ausführung', S.isFile ? 'Lokale Datei (ohne Synchronisation)' : root.location.host),
-        kv('Version', WV.VERSION + ' (Etappe 2: lokal, ohne Google-Synchronisation)'),
+        kv('Version', WV.VERSION),
         S.isFile ? null : h('p', null, [h('a', { href: 'verbindungstest.html', class: 'btn small' }, 'Verbindungstest Google Drive')]),
         h('p', { class: 'muted' }, 'Organisatorische Wiedervorlage nicht dringender Aufgaben. Kein Patientenaktensystem, kein Befundarchiv, keine Alarmierung, keine medizinische Entscheidungsunterstützung. Patientenbezug nur als „Nachname, Initiale“.')
       ])
-    ];
+    ]);
     dialogShell(dlg, 'sHead', 'Einstellungen und Sicherung', body);
   }
 
   // ---------- Passphrase ----------
-  function openPass() {
+  // opts.forSync: Ersteinrichtung der Synchronisation (Schlüssel wird danach in Google Drive abgelegt)
+  function openPass(opts) {
+    opts = opts || {};
     var dlg = $('dlgPass');
     var existing = !!Ctl.key;
+    var syncOn = WV.sync && WV.sync.enabled();
     var p1 = h('input', { type: 'password', id: 'pass1', autocomplete: 'new-password', spellcheck: 'false' });
     var p2 = h('input', { type: 'password', id: 'pass2', autocomplete: 'new-password', spellcheck: 'false' });
     var show = h('input', { type: 'checkbox', id: 'passShow' });
@@ -2854,10 +3417,14 @@
       try {
         var r = await Ctl.setupKey(p1.value);
         p1.value = ''; p2.value = '';
+        if (opts.forSync) await WV.sync.enable({ keyPendingUpload: true });
+        else if (syncOn) await WV.sync.onKeyChanged();
         dlg.close();
-        toast(r && r.message ? r.message : 'Passphrase festgelegt. Sicherungen werden jetzt verschlüsselt.', { level: r && r.ok === false ? 'error' : '', timeout: 5000 });
+        toast(opts.forSync ? 'Passphrase festgelegt. Die Synchronisation ist eingerichtet.' :
+          (r && r.message ? r.message : 'Passphrase festgelegt. Sicherungen werden jetzt verschlüsselt.'), { level: r && r.ok === false ? 'error' : '', timeout: 5000 });
         render();
         if ($('dlgSettings').open) renderSettings();
+        if (opts.forSync || syncOn) WV.sync.syncNow().then(afterSync);
       } catch (e) {
         err.textContent = 'Der Schlüssel konnte nicht erzeugt werden.';
         okBtn.disabled = false; okBtn.textContent = 'Festlegen';
@@ -2865,9 +3432,12 @@
     }
     okBtn.addEventListener('click', submit);
     [p1, p2].forEach(function (el) { el.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } }); });
-    dialogShell(dlg, 'pHead', existing ? 'Neue Passphrase festlegen' : 'Passphrase für die Sicherung', [
-      h('p', null, 'Sicherungsdateien werden mit dieser Passphrase verschlüsselt. Die Passphrase selbst wird nirgends gespeichert.'),
+    dialogShell(dlg, 'pHead', opts.forSync ? 'Passphrase für Synchronisation und Sicherung' : (existing ? 'Neue Passphrase festlegen' : 'Passphrase für die Sicherung'), [
+      h('p', null, opts.forSync
+        ? 'Die Aufgaben werden vor der Übertragung zu Google Drive mit dieser Passphrase verschlüsselt. Dieselbe Passphrase gibst du später einmal auf dem iPhone ein. Sie wird nirgends gespeichert.'
+        : 'Sicherungsdateien werden mit dieser Passphrase verschlüsselt. Die Passphrase selbst wird nirgends gespeichert.'),
       existing ? h('p', { class: 'muted' }, 'Bereits vorhandene Sicherungsdateien lassen sich weiterhin nur mit der bisherigen Passphrase öffnen.') : null,
+      syncOn && existing ? h('p', { class: 'muted' }, 'Die Synchronisation ist eingerichtet: Auf den anderen Geräten musst du danach die neue Passphrase einmal eingeben.') : null,
       h('p', { class: 'muted' }, 'Empfehlung: 5–6 zufällige Wörter. Ohne die Passphrase ist eine Sicherung nicht wiederherstellbar – niemand kann sie zurücksetzen.'),
       h('label', { class: 'field' }, [h('span', { class: 'opt-label' }, 'Passphrase'), p1]),
       h('label', { class: 'field' }, [h('span', { class: 'opt-label' }, 'Wiederholen'), p2]),
@@ -2879,6 +3449,241 @@
     p1.focus();
   }
   WV.ui.openPass = openPass;
+
+  // ---------- Synchronisation ----------
+  var Y = WV.sync, AU = WV.auth;
+
+  function syncSection() {
+    var out = [h('h3', null, 'Synchronisation (Google Drive)')];
+    if (!AU.available()) {
+      out.push(h('div', { class: 'card inner' }, [h('p', { class: 'muted' }, S.isFile
+        ? 'In der lokalen Datei ist keine Synchronisation möglich. Bitte die Online-Version verwenden: https://ben90ld.github.io/wiedervorlage_pia/'
+        : 'Synchronisation ist hier nicht verfügbar.')]));
+      return out;
+    }
+    if (!Y.enabled()) {
+      out.push(h('div', { class: 'card inner' }, [
+        h('p', null, 'Klinik-PC und iPhone verwenden dann denselben Aufgabenbestand. Die Aufgaben werden vor der Übertragung mit deiner Passphrase verschlüsselt und nur im versteckten App-Ordner deines Google Drive abgelegt. Notizen bleiben auf dem jeweiligen Gerät.'),
+        h('div', { class: 'btn-row' }, [h('button', { type: 'button', class: 'btn primary', id: 'btnSyncSetup', onclick: function () { goGoogle('select_account', 'setup'); } }, 'Synchronisation einrichten')])
+      ]));
+      return out;
+    }
+    var c = Y.cfg(), st = Y.status(), exp = AU.expiresAt();
+    var others = Object.keys(c.others || {}).map(function (k) { var o = c.others[k]; return o.label + ' (Stand ' + (o.exportedAt ? D.fmtDateTime(o.exportedAt) : '–') + ')'; });
+    var auto = h('input', { type: 'checkbox', id: 'syncAuto' });
+    auto.checked = c.autoConnect !== false;
+    auto.addEventListener('change', function () { Y.setAutoConnect(auto.checked); });
+    out.push(h('div', { class: 'card inner' }, [
+      kv('Status', st.text, st.level === 'error' ? 'error' : (st.level === 'warn' ? 'warn' : '')),
+      kv('Letzter Abgleich', c.lastSyncAt ? D.fmtDateTime(c.lastSyncAt) : 'noch keiner'),
+      kv('Google-Anmeldung', AU.token() ? 'aktiv bis ' + D.fmtDateTime(new Date(exp).toISOString()).slice(-5) : 'abgelaufen – wird bei Bedarf erneuert'),
+      kv('Weitere Geräte', others.length ? others.join(', ') : 'noch keine'),
+      kv('Nicht synchronisiert', 'Notizen (bleiben auf dem jeweiligen Gerät)'),
+      Y.skipped() ? kv('Übersprungen', Y.skipped() + ' Gerätedatei(en) mit älterer Passphrase', 'warn') : null,
+      c.lastError ? kv('Letzter Fehler', c.lastError.message + ' (' + D.fmtDateTime(c.lastError.at) + ')', 'error') : null,
+      h('label', { class: 'check-row' }, [auto, ' Beim Öffnen automatisch mit Google verbinden (kurzer Wechsel zu Google und zurück)']),
+      h('div', { class: 'btn-row' }, [
+        h('button', { type: 'button', class: 'btn primary', onclick: function () { syncNowUi(true); } }, 'Jetzt synchronisieren'),
+        h('button', { type: 'button', class: 'btn', onclick: function () { goGoogle('select_account', 'manual'); } }, 'Neu bei Google anmelden'),
+        h('button', { type: 'button', class: 'btn small link', onclick: async function () {
+          await Y.disable(); toast('Synchronisation auf diesem Gerät beendet. Die Daten auf diesem Gerät bleiben erhalten.'); render(); renderSettings();
+        } }, 'Synchronisation auf diesem Gerät beenden')
+      ])
+    ]));
+    return out;
+  }
+
+  function showOverlay(text) { $('overlayText').textContent = text || 'Verbinde mit Google …'; $('overlay').hidden = false; }
+  function hideOverlay() { $('overlay').hidden = true; }
+
+  // Zu Google wechseln – vorher alle offenen Eingaben speichern
+  function goGoogle(prompt, purpose) {
+    if (!root.navigator.onLine) { toast('Keine Internetverbindung.', { level: 'warn' }); return; }
+    showOverlay('Verbinde mit Google …');
+    Promise.resolve(flushEdit()).then(function () {
+      saveDraft();
+      AU.start(prompt, purpose);
+    });
+  }
+  WV.ui.goGoogle = goGoogle;
+
+  // Läuft gerade eine Eingabe? Dann nicht automatisch zu Google wechseln.
+  function isBusy() {
+    if (doc.querySelector('dialog[open]')) return true;
+    if (Q.saving || E.saveTimer) return true;
+    if ($('qTitle').value.trim() || $('qPatient').value.trim()) return true;
+    var a = doc.activeElement;
+    if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.id !== 'search' && a.id !== 'qTitle') return true;
+    return false;
+  }
+
+  async function maybeAutoConnect() {
+    var c = Y.cfg();
+    if (!Y.enabled() || AU.token() || c.autoConnect === false) return false;
+    if (!root.navigator.onLine || doc.visibilityState !== 'visible' || Y.needKey()) return false;
+    if (!AU.mayAutoConnect() || isBusy()) return false;
+    var reachable = await AU.probe(2500);
+    if (!reachable || isBusy() || AU.token()) return false;
+    goGoogle('none', 'auto');
+    return true;
+  }
+
+  function afterSync(r) {
+    if (!r) return;
+    if (r.ok) { renderSyncPill(); if ($('dlgSettings').open) renderSettings(); return; }
+    if (r.code === 'KEY') { openUnlock(); return; }
+    renderSyncPill();
+    if ($('dlgSettings').open) renderSettings();
+  }
+
+  async function syncNowUi(manual) {
+    var st = Y.status();
+    if (st.code === 'auth') { goGoogle(AU.silentFailed() ? 'select_account' : 'none', 'manual'); return; }
+    if (st.code === 'key') { openUnlock(); return; }
+    var r = await Y.syncNow();
+    afterSync(r);
+    if (manual) {
+      if (r.ok) toast('Synchronisiert.' + (r.stats && r.stats.files ? ' ' + r.stats.tasksNew + ' neu, ' + r.stats.tasksUpdated + ' aktualisiert.' : ''), { timeout: 2500 });
+      else if (r.code === 'offline') toast('Offline – die Änderungen werden später übertragen.', { level: 'warn' });
+      else if (r.code !== 'KEY' && r.code !== 'busy' && r.code !== 'auth') toast(r.message || 'Synchronisation fehlgeschlagen.', { level: 'error', timeout: 6000 });
+    }
+  }
+  WV.ui.syncNow = syncNowUi;
+
+  function renderSyncPill() {
+    var pill = $('syncPill');
+    var st = Y.status();
+    if (st.code === 'off' || st.code === 'unavailable') { pill.hidden = true; return; }
+    pill.hidden = false;
+    var conflicts = S.view ? S.view.counts.conflicts : 0;
+    var text = st.text, level = st.level, ic = st.code === 'ok' ? 'check' : (st.code === 'error' ? 'alert' : (st.code === 'key' ? 'lock' : 'restore'));
+    if (conflicts && (st.code === 'ok' || st.code === 'pending')) { text = conflicts + ' Konflikt' + (conflicts > 1 ? 'e' : '') + ' prüfen'; level = 'warn'; ic = 'conflict'; }
+    clear(pill);
+    pill.className = 'pill lvl-' + level;
+    add(pill, [icon(ic), h('span', { class: 'pill-text' }, text)]);
+    pill.title = 'Synchronisation: ' + text;
+    pill.setAttribute('data-code', conflicts && (st.code === 'ok' || st.code === 'pending') ? 'conflict' : st.code);
+  }
+  WV.ui.renderSyncPill = renderSyncPill;
+
+  function onSyncPill() {
+    var code = $('syncPill').getAttribute('data-code');
+    if (code === 'conflict') {
+      var first = Array.from(S.tasks.values()).find(function (t) { return M.openConflicts(t).length > 0; });
+      if (first) openEdit(first.id);
+      return;
+    }
+    if (code === 'error' || code === 'offline') { openSettings(); if (code === 'error') syncNowUi(false); return; }
+    syncNowUi(true);
+  }
+
+  // Passphrase eines anderen Geräts eingeben (Schlüssel liegt in Google Drive)
+  function openUnlock(pre) {
+    var need = pre || Y.needKey();
+    if (!need || !need.info) {
+      toast('Für die Synchronisation fehlt der Schlüssel. Bitte in den Einstellungen „Neu bei Google anmelden“.', { level: 'warn', timeout: 6000 });
+      return;
+    }
+    var dlg = $('dlgPass');
+    var p = h('input', { type: 'password', id: 'unlockPass', autocomplete: 'current-password', spellcheck: 'false' });
+    var err = h('p', { class: 'hint-line warn', 'aria-live': 'polite' });
+    var okBtn = h('button', { type: 'button', class: 'btn primary' }, 'Entsperren');
+    async function submit() {
+      if (!p.value) { p.focus(); return; }
+      okBtn.disabled = true; okBtn.textContent = 'Prüfe …'; err.textContent = '';
+      try {
+        await Y.unlockWith(p.value, need.info);
+        p.value = '';
+        dlg.close();
+        toast('Passphrase übernommen. Synchronisiere …', { timeout: 3000 });
+        var r = await Y.syncNow();
+        afterSync(r);
+        render();
+      } catch (e) {
+        err.textContent = e && e.code === 'WRONG_PASSPHRASE' ? 'Passphrase falsch. Bitte erneut versuchen.' : 'Die Passphrase konnte nicht geprüft werden.';
+        okBtn.disabled = false; okBtn.textContent = 'Entsperren';
+        p.focus();
+      }
+    }
+    okBtn.addEventListener('click', submit);
+    p.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+    dialogShell(dlg, 'pHead', 'Passphrase der Synchronisation', [
+      h('p', null, 'In Google Drive liegen Aufgaben, die mit einer Passphrase verschlüsselt sind (eingerichtet auf einem anderen Gerät oder dort geändert). Bitte diese Passphrase einmal eingeben.'),
+      Ctl.key ? h('p', { class: 'muted' }, 'Die Sicherungen dieses Geräts verwenden danach ebenfalls diese Passphrase. Ältere Sicherungsdateien lassen sich weiterhin mit der bisherigen Passphrase öffnen.') : null,
+      h('label', { class: 'field' }, [h('span', { class: 'opt-label' }, 'Passphrase'), p]),
+      err
+    ], [h('button', { type: 'button', class: 'btn', onclick: function () { dlg.close(); } }, 'Später'), okBtn]);
+    if (!dlg.open) dlg.showModal();
+    p.focus();
+  }
+  WV.ui.openUnlock = openUnlock;
+
+  // Rückkehr von Google auswerten (beim Start)
+  WV.ui.handleAuthReturn = async function (ret) {
+    hideOverlay();
+    if (!ret) return startupSync();
+    if (ret.error) {
+      if (ret.purpose === 'setup') { toast(AU.errorText(ret.error), { level: 'error', timeout: 0 }); return; }
+      if (ret.prompt === 'none') {
+        S.authBanner = AU.errorText(ret.error);
+        renderBanners();
+        return;
+      }
+      toast(AU.errorText(ret.error), { level: 'error', timeout: 8000 });
+      return;
+    }
+    S.authBanner = null;
+    if (ret.purpose === 'setup') {
+      showOverlay('Synchronisation wird eingerichtet …');
+      var res;
+      try { res = await Y.continueSetup(); } catch (e) { hideOverlay(); toast('Einrichtung fehlgeschlagen: ' + (e.message || 'Fehler'), { level: 'error', timeout: 0 }); return; }
+      hideOverlay();
+      if (res.need === 'create') { openPass({ forSync: true }); return; }
+      if (res.need === 'unlock') { openUnlock({ info: res.info }); return; }
+      toast(res.usedExisting ? 'Synchronisation eingerichtet. Es gilt die Passphrase deiner Sicherung.' : 'Synchronisation eingerichtet.', { timeout: 5000 });
+    }
+    var r = await Y.syncNow();
+    afterSync(r);
+  };
+
+  function startupSync() {
+    if (!Y.enabled()) return;
+    if (AU.token()) Y.syncNow().then(afterSync);
+    else maybeAutoConnect();
+  }
+
+  WV.ui.initSync = function () {
+    $('syncPill').addEventListener('click', onSyncPill);
+    Y.onStatus = function () { renderSyncPill(); };
+    Y.onNeedKey = function () { renderSyncPill(); };
+    Y.onMerged = function (stats) {
+      return WV.ui.loadState().then(function () {
+        render();
+        WV.ui.refreshEdit();
+        var parts = [];
+        if (stats.tasksNew) parts.push(stats.tasksNew + ' neu');
+        if (stats.tasksUpdated) parts.push(stats.tasksUpdated + ' geändert');
+        if (stats.conflicts) parts.push(stats.conflicts + ' Konflikt' + (stats.conflicts > 1 ? 'e' : '') + ' zu prüfen');
+        if (parts.length) toast('Vom anderen Gerät übernommen: ' + parts.join(', ') + '.', { timeout: 4000 });
+      });
+    };
+    var lastResume = 0;
+    doc.addEventListener('visibilitychange', function () {
+      if (doc.visibilityState !== 'visible' || !Y.enabled()) return;
+      var now = Date.now();
+      if (now - lastResume < 30000) return;
+      lastResume = now;
+      if (AU.token()) Y.syncNow().then(afterSync); else maybeAutoConnect();
+    });
+    root.addEventListener('online', function () { renderSyncPill(); if (Y.enabled()) { if (AU.token()) Y.syncNow().then(afterSync); else maybeAutoConnect(); } });
+    root.addEventListener('offline', renderSyncPill);
+    setInterval(function () {
+      if (doc.visibilityState === 'visible' && Y.enabled() && AU.token()) Y.syncNow().then(afterSync);
+      else renderSyncPill();
+    }, Y.PERIOD);
+    // bfcache: nach "Zurück" von Google ohne Neuladen
+    root.addEventListener('pageshow', function (e) { if (e.persisted) hideOverlay(); });
+  };
 
   // ---------- Import / Wiederherstellung ----------
   function openImport(opts) {
@@ -3149,6 +3954,10 @@
   'use strict';
   var WV = root.WV, doc = root.document;
 
+  // Rückkehr von Google sofort auswerten und das Token aus der Adresszeile entfernen
+  var authReturn = null;
+  try { authReturn = WV.auth.handleReturn(); } catch (e) { authReturn = { error: 'state_mismatch' }; }
+
   async function boot() {
     WV.ui.applyTheme();
     // Einbettung in fremde Seiten verhindern
@@ -3157,7 +3966,6 @@
       return;
     }
     if (!WV.crypto.available()) {
-      // ohne Web Crypto keine verschlüsselte Sicherung – App bleibt nutzbar, Hinweis in den Einstellungen
       WV.state.fatal = 'Dieser Browser stellt keine Verschlüsselungsfunktionen bereit. Sicherungen sind hier nicht möglich.';
     }
     try {
@@ -3170,14 +3978,18 @@
     }
     await WV.ui.loadState();
     await WV.backupCtl.init();
+    await WV.sync.init();
     WV.ui.init();
+    WV.ui.initSync();
     WV.ui.render();
     WV.ui.focusQuick();
     WV.db.requestPersist().then(function (p) { WV.state.persisted = p; });
     WV.ui.initSW();
+    doc.documentElement.setAttribute('data-ready', '1');
+    // Synchronisation bzw. Rückkehr von Google
+    WV.ui.handleAuthReturn(authReturn);
     // Ungesicherte Änderungen vom letzten Mal nachholen (ohne Dialog)
     setTimeout(function () { WV.backupCtl.runAuto(); }, 1500);
-    doc.documentElement.setAttribute('data-ready', '1');
   }
 
   if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', boot);

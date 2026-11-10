@@ -364,6 +364,12 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
 .warn-text { color: var(--red); font-weight: 600; }
 #summary { margin-top: 8px; font-family: Consolas, "Courier New", monospace; font-size: 13px; }
 
+/* ---------- Verbindungsanzeige ---------- */
+.overlay { position: fixed; inset: 0; background: rgba(20, 30, 40, .35); display: flex; align-items: center; justify-content: center; z-index: 80; }
+.overlay-box { background: var(--surface); color: var(--text); padding: 14px 20px; border-radius: 10px; border: 1px solid var(--border); font-weight: 600; }
+.pill.lvl-info { color: var(--text-2); }
+.check-row { display: flex; gap: 8px; align-items: center; margin: 6px 0; font-size: 14px; }
+
 /* ---------- Meldungen ---------- */
 .toasts { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 6px; z-index: 60; width: max-content; max-width: calc(100vw - 32px); }
 .toast { display: flex; align-items: center; gap: 8px; background: #22313d; color: #f1f6f9; padding: 6px 6px 6px 14px; border-radius: 8px; font-size: 14px; box-shadow: 0 4px 16px rgba(0,0,0,.2); }
@@ -389,14 +395,16 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
   :root { --fs: 16px; }
   .wrap { padding: 0 12px; }
   .top-inner { gap: 8px; min-height: 48px; }
-  .brand span:last-child { display: none; }
+  .brand { display: none; }
+  .top-inner { flex-wrap: nowrap; gap: 6px; }
+  .top-actions { gap: 4px; margin-left: auto; }
+  .pill { padding: 4px 7px; min-height: 36px; min-width: 36px; justify-content: center; }
   .counters { gap: 4px; }
-  .counters { flex-wrap: nowrap; }
-  .counter { padding: 3px 8px; font-size: 13px; }
+  .counters { flex-wrap: nowrap; min-width: 0; overflow: hidden; }
+  .counter { padding: 3px 7px; font-size: 12.5px; }
   .counter .c-l { display: none; }
   .counter .c-s { display: inline; }
   .pill .pill-text { display: none; }
-  .pill { padding: 4px 8px; min-height: 36px; }
   .icon-btn { width: 40px; height: 40px; }
   input[type="text"], input[type="search"], input[type="password"], input[type="date"], select, textarea { font-size: 16px; min-height: 42px; }
   .quick { padding: 10px; margin-top: 10px; }

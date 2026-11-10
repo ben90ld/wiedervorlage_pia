@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://www.googleapis.com; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#e9f2f8" media="(prefers-color-scheme: light)">
@@ -26,6 +26,7 @@
       <h1 class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Wiedervorlage</span></h1>
       <div class="counters" id="counters"></div>
       <div class="top-actions">
+        <button type="button" class="pill" id="syncPill" hidden></button>
         <button type="button" class="pill" id="backupPill"></button>
         <button type="button" class="icon-btn" id="btnSettings" aria-label="Einstellungen und Sicherung" title="Einstellungen und Sicherung"></button>
       </div>
@@ -144,10 +145,11 @@
         <div class="seg" id="eStatus" role="radiogroup" aria-labelledby="eStatusLabel"></div>
       </div>
     </div>
-    <label class="field">
-      <span class="opt-label">Notiz <small>– nur auf diesem Gerät, nur organisatorische Angaben</small></span>
+    <label class="field" id="eNoteField">
+      <span class="opt-label">Notiz <small>– nur auf diesem Gerät, wird nicht synchronisiert, nur organisatorische Angaben</small></span>
       <textarea id="eNote" rows="3" maxlength="2000"></textarea>
     </label>
+    <p class="hint-line" id="eNoteHidden" hidden>Notizen werden nur am Klinik-PC gespeichert und nicht synchronisiert.</p>
     <div class="meta-line" id="eMeta"></div>
   </div>
   <div class="dlg-foot">
@@ -163,6 +165,8 @@
 
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 <noscript><p class="noscript">Für die Wiedervorlage muss JavaScript aktiviert sein.</p></noscript>
+<div class="overlay" id="overlay" hidden><div class="overlay-box" id="overlayText">Verbinde mit Google …</div></div>
+<script src="config.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
