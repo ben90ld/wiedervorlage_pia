@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="de" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#e9f2f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141b21" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Wiedervorlage">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<title>Wiedervorlage</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#list">Zur Aufgabenliste</a>
+<div class="app" id="app">
+  <header class="top">
+    <div class="wrap top-inner">
+      <h1 class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Wiedervorlage</span></h1>
+      <div class="counters" id="counters"></div>
+      <div class="top-actions">
+        <button type="button" class="pill" id="backupPill"></button>
+        <button type="button" class="icon-btn" id="btnSettings" aria-label="Einstellungen und Sicherung" title="Einstellungen und Sicherung"></button>
+      </div>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div id="banners"></div>
+
+    <section class="quick card" aria-label="Neue Aufgabe">
+      <div class="quick-main">
+        <label class="sr-only" for="qTitle">Neue Aufgabe</label>
+        <input id="qTitle" class="q-title" type="text" autocomplete="off" maxlength="300" placeholder="Neue Aufgabe eingeben – Enter speichert">
+        <button type="button" id="qSave" class="btn primary">Speichern</button>
+      </div>
+      <div class="quick-opts">
+        <div class="opt opt-patient">
+          <label class="opt-label" for="qPatient">Patient</label>
+          <div class="combo">
+            <input id="qPatient" type="text" autocomplete="off" spellcheck="false" maxlength="80" placeholder="Nachname, V." role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="qPatientList">
+            <ul id="qPatientList" class="suggest" role="listbox" aria-label="Patientenvorschläge" hidden></ul>
+          </div>
+        </div>
+        <div class="opt opt-recall">
+          <span class="opt-label" id="qRecallLabel">Wiedervorlage</span>
+          <div class="seg pills" id="qRecallPicks" role="radiogroup" aria-labelledby="qRecallLabel"></div>
+          <input id="qRecallDate" type="date" aria-label="Wiedervorlage: Datum">
+        </div>
+        <div class="opt opt-deadline">
+          <label class="opt-label" for="qDeadline">Frist</label>
+          <div class="date-clear">
+            <input id="qDeadline" type="date">
+            <button type="button" class="icon-btn small" id="qDeadlineClear" aria-label="Frist entfernen" title="Frist entfernen"></button>
+          </div>
+        </div>
+        <div class="opt opt-important">
+          <span class="opt-label" aria-hidden="true">&nbsp;</span>
+          <button type="button" class="toggle" id="qImportant" aria-pressed="false"></button>
+        </div>
+      </div>
+      <div class="hint-line" id="qPatientHint" aria-live="polite"></div>
+      <div class="quick-types">
+        <span class="opt-label" id="qTypeLabel">Art</span>
+        <div class="chips" id="qTypes" role="radiogroup" aria-labelledby="qTypeLabel"></div>
+      </div>
+    </section>
+
+    <section class="toolbar" aria-label="Suche und Filter">
+      <div class="search">
+        <input id="search" type="search" placeholder="Suchen: Titel, Patient, Notiz  ( / )" aria-label="Suchen" autocomplete="off" spellcheck="false">
+      </div>
+      <select id="fType" aria-label="Filter: Aufgabenart"></select>
+      <button type="button" class="toggle small" id="fImportant" aria-pressed="false"></button>
+      <div class="seg small" id="fStatus" role="radiogroup" aria-label="Filter: Status"></div>
+      <button type="button" class="btn link" id="fReset" hidden>Filter zurücksetzen</button>
+      <button type="button" class="btn small f-toggle" id="fToggle" aria-expanded="false" aria-controls="fType">Filter</button>
+    </section>
+
+    <main id="list" class="list" tabindex="-1" aria-label="Aufgaben"></main>
+
+    <footer class="foot">
+      <span id="footVersion"></span>
+      <span>Organisatorische Wiedervorlage – kein Patientenaktensystem, keine Alarmierung.</span>
+    </footer>
+  </div>
+</div>
+
+<dialog id="dlgEdit" class="dlg" aria-labelledby="eHead">
+  <div class="dlg-head">
+    <h2 id="eHead">Aufgabe bearbeiten</h2>
+    <button type="button" class="icon-btn" data-close aria-label="Schließen (Esc)" title="Schließen (Esc)"></button>
+  </div>
+  <div class="dlg-body">
+    <div id="eConflicts"></div>
+    <label class="field">
+      <span class="opt-label">Titel</span>
+      <input id="eTitle" type="text" maxlength="300" autocomplete="off">
+    </label>
+    <div class="field">
+      <label class="opt-label" for="ePatient">Patient</label>
+      <div class="combo">
+        <input id="ePatient" type="text" autocomplete="off" spellcheck="false" maxlength="80" placeholder="Nachname, V." role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="ePatientList">
+        <ul id="ePatientList" class="suggest" role="listbox" aria-label="Patientenvorschläge" hidden></ul>
+      </div>
+      <div class="hint-line" id="ePatientHint" aria-live="polite"></div>
+    </div>
+    <div class="field">
+      <span class="opt-label" id="eTypeLabel">Art</span>
+      <div class="chips" id="eTypes" role="radiogroup" aria-labelledby="eTypeLabel"></div>
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label class="opt-label" for="eRecall">Wiedervorlage</label>
+        <div class="date-clear">
+          <input id="eRecall" type="date">
+          <button type="button" class="icon-btn small" id="eRecallClear" aria-label="Wiedervorlage: Datum unbekannt" title="Datum unbekannt"></button>
+        </div>
+        <div class="seg small" id="eRecallPicks" aria-label="Verschieben"></div>
+      </div>
+      <div class="field">
+        <label class="opt-label" for="eDeadline">Frist</label>
+        <div class="date-clear">
+          <input id="eDeadline" type="date">
+          <button type="button" class="icon-btn small" id="eDeadlineClear" aria-label="Frist entfernen" title="Frist entfernen"></button>
+        </div>
+        <div class="hint-line">Verschieben ändert die Frist nie.</div>
+      </div>
+    </div>
+    <div class="row2">
+      <div class="field">
+        <span class="opt-label">Markierung</span>
+        <button type="button" class="toggle" id="eImportant" aria-pressed="false"></button>
+      </div>
+      <div class="field">
+        <span class="opt-label" id="eStatusLabel">Status</span>
+        <div class="seg" id="eStatus" role="radiogroup" aria-labelledby="eStatusLabel"></div>
+      </div>
+    </div>
+    <label class="field">
+      <span class="opt-label">Notiz <small>– nur auf diesem Gerät, nur organisatorische Angaben</small></span>
+      <textarea id="eNote" rows="3" maxlength="2000"></textarea>
+    </label>
+    <div class="meta-line" id="eMeta"></div>
+  </div>
+  <div class="dlg-foot">
+    <span id="eSaveState" class="save-state" aria-live="polite"></span>
+    <button type="button" class="btn danger" id="eDelete">Löschen</button>
+    <button type="button" class="btn primary" data-close>Fertig</button>
+  </div>
+</dialog>
+
+<dialog id="dlgSettings" class="dlg" aria-labelledby="sHead"></dialog>
+<dialog id="dlgPass" class="dlg narrow" aria-labelledby="pHead"></dialog>
+<dialog id="dlgImport" class="dlg" aria-labelledby="iHead"></dialog>
+
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+<noscript><p class="noscript">Für die Wiedervorlage muss JavaScript aktiviert sein.</p></noscript>
+<script src="app.js"></script>
+</body>
+</html>
