@@ -276,6 +276,19 @@ Der Bereich „Heute & überfällig“ zeigt in der Überschrift seine Zusammens
 13 Arten in dieser Reihenfolge: Doku, Ambulanzbrief, Bescheinigung, Mail-Antwort, Rückruf, Rezept, Befund/Labor, Antrag/Formular, RS, PIA-Team, PIA-Intervision, Vorbereitung, Sonstiges.
 Erkennung über Stichwörter im Titel (früheste Fundstelle gewinnt). Kurzkürzel wie „RS“ nur als ganzes Wort. „Vorbereitung/vorbereiten“ ist schwach: gilt nur, wenn keine andere Art erkannt wird („Rezept vorbereiten“ → Rezept). Annahme: „RS“ = Rücksprache (Stichwort „Rücksprache“ wird ebenfalls erkannt).
 
+## 11b. Machbarkeitstest Google Drive (10.11.2026)
+
+Testseite `verbindungstest.html` (Anmeldung per Weiterleitung, nur `drive.appdata`, Testdatei anlegen/lesen/überschreiben/löschen):
+
+| Umgebung | Ergebnis |
+|---|---|
+| Klinik-PC, Chrome 147, Browser-Tab | bestanden; Erneuerung ohne Rückfrage (`prompt=none`) bestanden |
+| iPhone, Safari-Tab | bestanden |
+| iPhone, Home-Bildschirm-App | bestanden – Rückkehr von Google in die App funktioniert |
+
+Hochladen ca. 1,3–2,1 s, Lesen ca. 0,7–0,9 s. Die Drive-Versionsnummer steigt nicht zwingend um 1 (1 → 3) – Änderungserkennung nur über „Version ungleich“.
+Google-Projekt im Status „Testen“ (Veröffentlichung verlangt Startseite und Datenschutzerklärung); Folge: Zustimmung etwa alle 7 Tage erneut.
+
 ## 12. Etappen (angepasste Reihenfolge)
 
 1. Architektur (dieses Dokument) + Verbindungstest am Klinik-PC
