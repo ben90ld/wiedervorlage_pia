@@ -50,21 +50,25 @@
             <ul id="qPatientList" class="suggest" role="listbox" aria-label="Patientenvorschläge" hidden></ul>
           </div>
         </div>
-        <div class="opt opt-recall">
-          <span class="opt-label" id="qRecallLabel">Wiedervorlage</span>
-          <div class="seg pills" id="qRecallPicks" role="radiogroup" aria-labelledby="qRecallLabel"></div>
-          <input id="qRecallDate" type="date" aria-label="Wiedervorlage: Datum">
-        </div>
         <div class="opt opt-deadline">
-          <label class="opt-label" for="qDeadline">Frist</label>
+          <label class="opt-label" for="qDeadline">Frist bis (optional)</label>
           <div class="date-clear">
             <input id="qDeadline" type="date">
             <button type="button" class="icon-btn small" id="qDeadlineClear" aria-label="Frist entfernen" title="Frist entfernen"></button>
           </div>
         </div>
-        <div class="opt opt-important">
-          <span class="opt-label" aria-hidden="true">&nbsp;</span>
-          <button type="button" class="toggle" id="qImportant" aria-pressed="false"></button>
+        <div class="opt opt-importance">
+          <span class="opt-label" id="qImportanceLabel">Wichtigkeit</span>
+          <div class="seg" id="qImportance" role="radiogroup" aria-labelledby="qImportanceLabel"></div>
+        </div>
+        <div class="opt opt-effort">
+          <span class="opt-label" id="qEffortLabel">Aufwand</span>
+          <div class="effort" id="qEffort" role="group" aria-labelledby="qEffortLabel"></div>
+        </div>
+        <div class="opt opt-recall">
+          <span class="opt-label" id="qRecallLabel">Wiedervorlage</span>
+          <div class="seg pills" id="qRecallPicks" role="radiogroup" aria-labelledby="qRecallLabel"></div>
+          <label class="recall-date"><span>oder am</span><input id="qRecallDate" type="date" aria-label="Wiedervorlage am (Datum)"></label>
         </div>
       </div>
       <div class="hint-line" id="qPatientHint" aria-live="polite"></div>
@@ -119,7 +123,7 @@
     </div>
     <div class="row2">
       <div class="field">
-        <label class="opt-label" for="eRecall">Wiedervorlage</label>
+        <label class="opt-label" for="eRecall">Wiedervorlage am</label>
         <div class="date-clear">
           <input id="eRecall" type="date">
           <button type="button" class="icon-btn small" id="eRecallClear" aria-label="Wiedervorlage: Datum unbekannt" title="Datum unbekannt"></button>
@@ -127,7 +131,7 @@
         <div class="seg small" id="eRecallPicks" aria-label="Verschieben"></div>
       </div>
       <div class="field">
-        <label class="opt-label" for="eDeadline">Frist</label>
+        <label class="opt-label" for="eDeadline">Frist bis</label>
         <div class="date-clear">
           <input id="eDeadline" type="date">
           <button type="button" class="icon-btn small" id="eDeadlineClear" aria-label="Frist entfernen" title="Frist entfernen"></button>
@@ -137,8 +141,10 @@
     </div>
     <div class="row2">
       <div class="field">
-        <span class="opt-label">Markierung</span>
-        <button type="button" class="toggle" id="eImportant" aria-pressed="false"></button>
+        <span class="opt-label" id="eImportanceLabel">Wichtigkeit</span>
+        <div class="seg" id="eImportance" role="radiogroup" aria-labelledby="eImportanceLabel"></div>
+        <span class="opt-label" id="eEffortLabel">Aufwand</span>
+        <div class="effort" id="eEffort" role="group" aria-labelledby="eEffortLabel"></div>
       </div>
       <div class="field">
         <span class="opt-label" id="eStatusLabel">Status</span>
