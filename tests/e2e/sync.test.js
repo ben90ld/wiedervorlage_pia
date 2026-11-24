@@ -153,7 +153,7 @@ test('Zwei Geräte: Einrichtung, verschlüsselter Abgleich, lokale Notizen, Konf
     await sync(IP.page);
     await sync(PC.page);
     await PC.page.waitForFunction(() => document.getElementById('eDeadline').value === '2026-11-25');
-    assert.equal(await PC.page.getAttribute('#eImportant', 'aria-pressed'), 'true');
+    assert.equal(await PC.page.getAttribute('#eImportance [data-val="1"]', 'aria-checked'), 'true');
     assert.equal(await PC.page.inputValue('#eNote'), 'Vorbefunde im Postfach, Sekretariat informiert');
     await PC.page.keyboard.press('Escape');
     await PC.page.waitForFunction(() => !document.getElementById('dlgEdit').open);
@@ -162,6 +162,23 @@ test('Zwei Geräte: Einrichtung, verschlüsselter Abgleich, lokale Notizen, Konf
     assert.equal(a.v.important, true);
     assert.equal(a.v.deadline, '2026-11-25');
     assert.equal(a.note, 'Vorbefunde im Postfach, Sekretariat informiert');
+  });
+
+  await t.test('Version 2: Sterne, Aufwand und eigene Reihenfolge werden synchronisiert', async () => {
+    await PC.page.evaluate(async () => {
+      const t = Array.from(WV.state.tasks.values()).find((x) => x.v.title === 'Bescheinigung offline erstellt');
+      await WV.actions.update(t.id, { important: 2, effort: 'S', recall: '2026-11-10' });
+      const ids = Array.from(document.querySelectorAll('.sec-today .rows .task')).map((r) => r.getAttribute('data-id'));
+      const moved = t.id; const order = [moved].concat(ids.filter((x) => x !== moved));
+      await WV.actions.setOrder(order, moved); WV.ui.render();
+    });
+    await sync(PC.page); await sync(IP.page);
+    const b = await task(IP.page, 'Bescheinigung offline erstellt');
+    assert.equal(b.v.important, 2);
+    assert.equal(b.v.effort, 'S');
+    assert.equal(b.v.rank, 10);
+    assert.equal(await IP.page.textContent('.sec-today .rows .task .title >> nth=0'), 'Bescheinigung offline erstellt');
+    assert.equal(await IP.page.locator('.sec-today .task .imp-2 svg').count(), 2);
   });
 
   await t.test('Nichts geändert → kein erneutes Hochladen; gelöschte eigene Datei wird neu angelegt', async () => {

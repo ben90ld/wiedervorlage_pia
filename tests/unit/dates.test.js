@@ -63,9 +63,11 @@ test('Anzeige relativ zu heute', () => {
   assert.equal(D.relRecall('2026-11-11', today), 'Morgen');
   assert.equal(D.relRecall('2026-11-14', today), 'Sa 14.11.');
   assert.equal(D.relRecall('2027-01-05', today), 'Di 05.01.2027');
-  assert.equal(D.relDeadline('2026-11-10', today), 'Frist heute');
-  assert.equal(D.relDeadline('2026-11-11', today), 'Frist morgen');
-  assert.equal(D.relDeadline('2026-11-08', today), 'Frist überschritten (08.11.)');
+  assert.equal(D.relDeadline('2026-11-10', today), 'Frist läuft heute ab!');
+  assert.equal(D.relDeadline('2026-11-11', today), 'Frist nähert sich! (morgen)');
+  assert.equal(D.relDeadline('2026-11-13', today), 'Frist nähert sich! (Fr 13.11.)');
+  assert.equal(D.relDeadline('2026-11-14', today), 'Frist Sa 14.11.');
+  assert.equal(D.relDeadline('2026-11-08', today), 'Frist abgelaufen! (08.11.)');
 });
 
 test('Schnellwahl: Ende der Woche, 1–4 Wochen, unbekannt', () => {
@@ -83,4 +85,13 @@ test('Schnellwahl: Ende der Woche, 1–4 Wochen, unbekannt', () => {
   assert.equal(D.relRecall(null, '2026-11-10'), 'Datum unbekannt');
   // Verschieben einer Aufgabe ohne Datum: ab heute
   assert.equal(D.postpone(null, '2026-11-10', 'w'), '2026-11-17');
+});
+
+test('Schnellwahl Version 2: heute (später), +2 Tage, +3 Tage; Erstelldatum', () => {
+  assert.equal(D.pick('2026-11-10', 'today'), '2026-11-10');
+  assert.equal(D.pick('2026-11-10', '2d'), '2026-11-12');
+  assert.equal(D.pick('2026-11-30', '3d'), '2026-12-03');
+  assert.equal(D.pick('2026-12-30', '3d'), '2027-01-02');
+  assert.equal(D.fmtDay(new Date(2026, 10, 10, 9, 0).toISOString(), '2026-11-24'), '10.11.');
+  assert.equal(D.fmtDay(new Date(2025, 11, 31, 9, 0).toISOString(), '2026-11-24'), '31.12.2025');
 });

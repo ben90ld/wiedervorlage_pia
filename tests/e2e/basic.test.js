@@ -19,7 +19,7 @@ test('Schnelleingabe: Enter speichert, Feld wird geleert, Cursor bleibt, Art erk
   assert.equal(rec.type, 'rezept');
   assert.equal(rec.typeAuto, true);
   assert.equal(rec.status, 'open');
-  assert.equal(rec.important, false);
+  assert.equal(rec.important, 0); // Stufe 0 = normal
   assert.equal(rec.deadline, null);
   // Weitere Aufgabe sofort danach möglich
   await page.keyboard.type('Rückruf durchführen');
@@ -40,15 +40,16 @@ test('Optionale Felder: Patient, Morgen, Frist, Wichtig, manuelle Art', async ()
   assert.equal(t.label, 'Musterfrau, E.');
   assert.equal(t.v.recall, '2026-11-11');
   assert.equal(t.v.deadline, '2026-11-12');
-  assert.equal(t.v.important, true);
+  assert.equal(t.v.important, 1);
   assert.equal(t.v.type, 'antrag');
   assert.equal(t.v.typeAuto, false);
   // Frist in 2 Tagen → "Heute & überfällig", gelb
   assert.deepEqual(await H.sectionTitles(page, 'today'), ['Unterlagen sichten']);
-  assert.equal(await page.locator('.sec-today .dl').getAttribute('class'), 'dl dl-yellow');
+  assert.equal(await page.locator('.sec-today .dl').getAttribute('class'), 'dl dl-soon');
+  assert.match(await page.textContent('.sec-today .dl'), /Frist nähert sich!/);
   // Felder zurückgesetzt
   assert.equal(await page.inputValue('#qPatient'), '');
-  assert.equal(await page.getAttribute('#qImportant', 'aria-pressed'), 'false');
+  assert.equal(await page.getAttribute('#qImportance [data-val="0"]', 'aria-checked'), 'true');
   assert.equal(await page.getAttribute('#qRecallPicks [data-val="1w"]', 'aria-checked'), 'true');
   await ctx.close();
 });
@@ -108,7 +109,7 @@ test('Bereiche, Sortierung und Zähler mit festen Daten', async () => {
   assert.deepEqual(await H.sectionTitles(page, 'week'), ['F Woche']);
   assert.deepEqual(await H.sectionTitles(page, 'later'), ['G später']);
   assert.match(await page.textContent('.task[aria-label^="A überfällig"] .recall'), /Seit 21 Tagen/);
-  assert.equal(await page.locator('.task[aria-label^="C Frist heute"] .dl').getAttribute('class'), 'dl dl-red');
+  assert.equal(await page.locator('.task[aria-label^="C Frist heute"] .dl').getAttribute('class'), 'dl dl-today');
   await ctx.close();
 });
 
@@ -292,7 +293,7 @@ test('Farbschema hell/dunkel umschaltbar und gespeichert', async () => {
 test('Schnellwahl Wiedervorlage: Ende der Woche, 3/4 Wochen, unbekannt; Datum im Bearbeiten entfernen', async () => {
   const { ctx, page } = await H.newPage(browser, base);
   const labels = await page.evaluate(() => Array.from(document.querySelectorAll('#qRecallPicks .seg-btn')).map((b) => b.textContent));
-  assert.deepEqual(labels, ['Morgen', 'Ende der Woche', '1 Woche', '2 Wochen', '3 Wochen', '4 Wochen', 'unbekannt']);
+  assert.deepEqual(labels, ['Heute (später)', 'Morgen', '+2 Tage', '+3 Tage', 'Ende der Woche', '1 Woche', '2 Wochen', '3 Wochen', '4 Wochen', 'unbekannt']);
   assert.equal(await page.getAttribute('#qTypes .chip >> nth=0', 'data-type'), 'doku');
   await H.quickAdd(page, 'Ende-der-Woche-Aufgabe', { recall: 'eow' });
   await H.quickAdd(page, 'Drei Wochen', { recall: '3w' });

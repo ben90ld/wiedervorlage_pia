@@ -118,7 +118,7 @@
       var pid = resolvePatient(data.patient, ctx, out);
       var t = M.newTask({
         title: data.title, type: data.type, typeAuto: data.typeAuto, patientId: pid,
-        recall: data.recall, deadline: data.deadline, important: data.important
+        recall: data.recall, deadline: data.deadline, important: data.important, effort: data.effort
       }, ctx);
       out.tasks.push(t);
       if (data.note) out.local.push({ id: t.id, note: data.note, nextStep: null, lu: ctx.t });
@@ -136,8 +136,9 @@
       var out = { tasks: [], patients: [], prev: t };
       var ch = Object.assign({}, changes);
       if ('patient' in ch) { ch.patientId = resolvePatient(ch.patient, ctx, out); delete ch.patient; }
-      if (ch.status === 'done' && t.v.status !== 'done') ch.doneAt = ctx.t;
+      if (ch.status === 'done' && t.v.status !== 'done') { ch.doneAt = ctx.t; ch.rank = null; }
       if (ch.status && ch.status !== 'done') ch.doneAt = null;
+      if ('recall' in ch && ch.recall !== t.v.recall && !('rank' in changes)) ch.rank = null; // neuer Termin → eigene Position aufheben
       var r = M.write(t, ch, ctx);
       if (opts.countPostpone) {
         r = M.write(r, { lastPostponedAt: ctx.t }, ctx);
@@ -155,7 +156,7 @@
       var t = cur.tasks[id];
       if (!t) throw new Error('missing');
       var nr = D.postpone(t.v.recall, D.today(), unit);
-      var r = M.write(t, { recall: nr, lastPostponedAt: ctx.t }, ctx);
+      var r = M.write(t, { recall: nr, lastPostponedAt: ctx.t, rank: null }, ctx);
       r = M.bumpPostpone(r, ctx, 1);
       return { tasks: [r], prev: t, newRecall: nr };
     });
@@ -177,6 +178,29 @@
       var prevOwn = prev.pp && prev.pp[own] ? prev.pp[own][0] : 0;
       if (curOwn !== prevOwn) r = M.bumpPostpone(r, ctx, prevOwn - curOwn);
       return { tasks: [r] };
+    });
+  };
+
+  // Eigene Reihenfolge: ids = Reihenfolge im Bereich nach dem Verschieben, moved = verschobene Aufgabe.
+  // Alle Aufgaben von oben bis zur verschobenen (bzw. bis zur letzten bereits platzierten) erhalten
+  // eine Position; darunter bleibt die automatische Sortierung.
+  A.setOrder = function (ids, moved) {
+    var k = ids.indexOf(moved);
+    var last = k;
+    ids.forEach(function (id, i) { var t = S.tasks.get(id); if (t && M.rank(t.v) !== null) last = Math.max(last, i); });
+    var target = {};
+    for (var i = 0; i <= last; i++) target[ids[i]] = (i + 1) * 10;
+    var changeIds = Object.keys(target).filter(function (id) { var t = S.tasks.get(id); return t && M.rank(t.v) !== target[id]; });
+    if (!changeIds.length) return Promise.resolve({ tasks: [] });
+    return commit({ tasks: changeIds }, function (cur, ctx) {
+      return { tasks: changeIds.filter(function (id) { return cur.tasks[id]; }).map(function (id) { return M.write(cur.tasks[id], { rank: target[id] }, ctx); }) };
+    });
+  };
+  A.clearRanks = function (ids) {
+    ids = ids.filter(function (id) { var t = S.tasks.get(id); return t && M.rank(t.v) !== null; });
+    if (!ids.length) return Promise.resolve({ tasks: [] });
+    return commit({ tasks: ids }, function (cur, ctx) {
+      return { tasks: ids.filter(function (id) { return cur.tasks[id]; }).map(function (id) { return M.write(cur.tasks[id], { rank: null }, ctx); }) };
     });
   };
 
@@ -275,6 +299,8 @@
   };
 
   function render() {
+    if (S.dragging) { S.renderPending = true; return; }
+    S.renderPending = false;
     S.today = D.today();
     var view = M.buildView(Array.from(S.tasks.values()), Array.from(S.patients.values()), S.local, {
       today: S.today, search: S.ui.search, fType: S.ui.fType, fImportant: S.ui.fImportant, fStatus: S.ui.fStatus
@@ -348,6 +374,11 @@
       if (comp.conflict) parts.push(comp.conflict + ' Konflikt');
       head.appendChild(h('span', { class: 'sec-comp' }, parts.join(' · ')));
     }
+    var ranked = items.filter(function (it) { return M.rank(it.task.v) !== null; }).map(function (it) { return it.task.id; });
+    if (ranked.length) {
+      head.appendChild(h('button', { type: 'button', class: 'btn link small reset-order', title: 'Eigene Reihenfolge in diesem Bereich aufheben',
+        onclick: function () { A.clearRanks(ranked).then(render); } }, 'Automatisch sortieren'));
+    }
     sec.appendChild(head);
     if (!count) {
       sec.appendChild(h('p', { class: 'empty' }, filtersActive() ? 'Keine Treffer.' : EMPTY[key]));
@@ -378,20 +409,25 @@
   function row(it) {
     var t = it.task, v = t.v, cls = it.cls;
     var today = S.today;
+    var imp = M.importance(v), eff = M.effort(v), rk = M.rank(v);
     var classes = 'task';
-    if (v.important) classes += ' is-important';
+    if (imp) classes += ' is-important' + (imp === 2 ? ' is-very-important' : '');
+    if (rk !== null) classes += ' is-ranked';
     if (S.ui.highlightId === t.id) classes += ' is-new';
     if (cls.conflict) classes += ' has-conflict';
     if (cls.deadlineColor === 'red') classes += ' dl-urgent';
     var label = v.title + (it.patient ? ', ' + it.patient : '') + ', ' + D.relRecall(v.recall, today) + (v.deadline ? ', ' + D.relDeadline(v.deadline, today) : '');
     var el = h('div', { class: classes, role: 'listitem', tabindex: '0', 'data-id': t.id, 'aria-label': label });
 
+    var grip = h('span', { class: 'drag', title: 'Ziehen zum Umsortieren (oben = als Nächstes) · Tastatur: Alt + ↑/↓', 'aria-hidden': 'true' }, [icon('grip')]);
     var doneBtn = h('button', { type: 'button', class: 'done-btn', 'data-act': 'done', 'aria-label': 'Als erledigt markieren', title: 'Erledigt (E)' }, [icon('check')]);
     var main = h('div', { class: 'task-main' });
     var line = h('div', { class: 'task-line' });
     if (it.patient) line.appendChild(h('span', { class: 'pat', title: 'Patient' }, it.patient));
     line.appendChild(h('span', { class: 'title' }, v.title));
-    if (v.important) line.appendChild(h('span', { class: 'imp', title: 'Wichtig' }, [icon('starFill'), h('span', { class: 'sr-only' }, 'Wichtig')]));
+    if (imp) line.appendChild(h('span', { class: 'imp imp-' + imp, title: imp === 2 ? 'Sehr wichtig' : 'Wichtig' },
+      [icon('starFill')].concat(imp === 2 ? [icon('starFill')] : []).concat([h('span', { class: 'sr-only' }, imp === 2 ? 'Sehr wichtig' : 'Wichtig')])));
+    if (eff) line.appendChild(h('span', { class: 'eff eff-' + eff, title: 'Aufwand: ' + M.EFFORT_LABEL[eff] }, [eff, h('span', { class: 'sr-only' }, ' Aufwand ' + M.EFFORT_LABEL[eff])]));
     main.appendChild(line);
 
     if (cls.conflict) line.appendChild(h('span', { class: 'badge b-conflict' }, [icon('conflict'), 'Konflikt prüfen']));
@@ -400,10 +436,13 @@
     if (it.local && it.local.note) line.appendChild(h('span', { class: 'badge b-note', title: it.local.note }, 'Notiz'));
 
     var meta = h('div', { class: 'task-meta' });
+    meta.appendChild(h('span', { class: 'created', title: 'Erstellt ' + D.fmtDateTime(v.createdAt) }, 'erstellt ' + D.fmtDay(v.createdAt, today)));
     var rc = 'recall' + (cls.dR === null ? ' nodate' : (cls.dR < 0 ? ' overdue' : (cls.dR === 0 ? ' due' : '')));
     meta.appendChild(h('span', { class: rc, title: v.recall ? 'Wiedervorlage ' + D.fmt(v.recall) : 'Wiedervorlage: Datum unbekannt' }, [icon('calendar'), D.relRecall(v.recall, today)]));
     if (v.deadline) {
-      meta.appendChild(h('span', { class: 'dl-slot' }, [h('span', { class: 'dl dl-' + cls.deadlineColor, title: 'Frist ' + D.fmt(v.deadline) }, [icon('flag'), D.relDeadline(v.deadline, today)])]));
+      var dlc = cls.dD < 0 ? 'dl-over' : (cls.dD === 0 ? 'dl-today' : (cls.dD <= 3 ? 'dl-soon' : 'dl-neutral'));
+      meta.appendChild(h('span', { class: 'dl-slot' }, [h('span', { class: 'dl ' + dlc, title: 'Frist bis ' + D.fmt(v.deadline), role: cls.dD <= 0 ? 'status' : null },
+        [icon(cls.dD <= 3 ? 'alert' : 'flag'), D.relDeadline(v.deadline, today)])]));
     } else {
       meta.appendChild(h('span', { class: 'dl-slot', 'aria-hidden': 'true' }));
     }
@@ -417,7 +456,7 @@
       actBtn('pp-w', '+1 Woche', '+1 W', 'Um 1 Woche verschieben (W)', 'Um 1 Woche verschieben'),
       actBtn('pp-m', '+1 Monat', '+1 M', 'Um 1 Monat verschieben (M)', 'Um 1 Monat verschieben')
     ]);
-    add(el, [doneBtn, typeIcon(v.type), main, meta, acts]);
+    add(el, [grip, doneBtn, typeIcon(v.type), main, meta, acts]);
     return el;
   }
 
@@ -482,6 +521,7 @@
 
   // ---------- Listen-Ereignisse ----------
   function onListClick(e) {
+    if (e.target.closest('.drag') || S.justDragged) return;
     var actEl = e.target.closest('[data-act]');
     var rowEl = e.target.closest('.task');
     if (!rowEl) return;
@@ -538,6 +578,74 @@
   }
 
   function short(s) { s = String(s || ''); return s.length > 48 ? s.slice(0, 47) + '…' : s; }
+
+  // ---------- Eigene Reihenfolge: Ziehen (Maus/Touch) und Alt + Pfeil ----------
+  function rowIds(container) {
+    return Array.prototype.filter.call(container.children, function (r) { return r.classList.contains('task'); })
+      .map(function (r) { return r.getAttribute('data-id'); });
+  }
+
+  function moveRow(rowEl, delta) {
+    var container = rowEl.parentElement;
+    var ids = rowIds(container);
+    var id = rowEl.getAttribute('data-id');
+    var i = ids.indexOf(id), j = i + delta;
+    if (j < 0 || j >= ids.length) return;
+    ids.splice(i, 1); ids.splice(j, 0, id);
+    A.setOrder(ids, id).then(function () {
+      render();
+      var r = $('list').querySelector('.task[data-id="' + cssEsc(id) + '"]');
+      if (r) r.focus();
+    });
+  }
+
+  function initDrag() {
+    var list = $('list');
+    var drag = null;
+    function rowsOf(c) { return Array.prototype.filter.call(c.children, function (r) { return r.classList.contains('task'); }); }
+    list.addEventListener('pointerdown', function (e) {
+      var handle = e.target.closest('.drag');
+      if (!handle || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      var row = handle.closest('.task');
+      if (!row || row.getAttribute('data-done')) return;
+      e.preventDefault();
+      try { handle.setPointerCapture(e.pointerId); } catch (err) { /* ältere Browser */ }
+      drag = { row: row, container: row.parentElement, handle: handle, y: e.clientY, moved: false, before: rowIds(row.parentElement).join(',') };
+      S.dragging = true;
+    });
+    list.addEventListener('pointermove', function (e) {
+      if (!drag) return;
+      if (!drag.moved && Math.abs(e.clientY - drag.y) < 5) return;
+      if (!drag.moved) { drag.moved = true; drag.row.classList.add('dragging'); doc.body.classList.add('is-dragging'); }
+      e.preventDefault();
+      var others = rowsOf(drag.container).filter(function (r) { return r !== drag.row; });
+      var before = null;
+      for (var i = 0; i < others.length; i++) {
+        var rect = others[i].getBoundingClientRect();
+        if (e.clientY < rect.top + rect.height / 2) { before = others[i]; break; }
+      }
+      if (before !== drag.row.nextSibling) drag.container.insertBefore(drag.row, before);
+      // am Rand automatisch scrollen
+      if (e.clientY < 70) root.scrollBy(0, -12);
+      else if (e.clientY > root.innerHeight - 70) root.scrollBy(0, 12);
+    });
+    function end(e) {
+      if (!drag) return;
+      var d = drag; drag = null;
+      try { d.handle.releasePointerCapture(e.pointerId); } catch (err) { /* ignorieren */ }
+      d.row.classList.remove('dragging'); doc.body.classList.remove('is-dragging');
+      S.dragging = false;
+      var ids = rowIds(d.container);
+      if (d.moved && ids.join(',') !== d.before) {
+        S.justDragged = true; setTimeout(function () { S.justDragged = false; }, 50);
+        A.setOrder(ids, d.row.getAttribute('data-id')).then(function () { render(); toast('Reihenfolge gespeichert.', { timeout: 1800 }); }, render);
+      } else if (S.renderPending) {
+        render();
+      }
+    }
+    list.addEventListener('pointerup', end);
+    list.addEventListener('pointercancel', end);
+  }
 
   // ---------- Patientenauswahl ----------
   function PatientPicker(input, list, hintEl, opts) {
@@ -644,8 +752,9 @@
   }
 
   // ---------- Schnelleingabe ----------
-  var Q = { type: null, recallPick: '1w', important: false, picker: null, saving: false };
-  var RECALL_PICKS = [['1d', 'Morgen'], ['eow', 'Ende der Woche'], ['1w', '1 Woche'], ['2w', '2 Wochen'], ['3w', '3 Wochen'], ['4w', '4 Wochen'], ['none', 'unbekannt']];
+  var Q = { type: null, recallPick: '1w', importance: 0, effort: null, picker: null, saving: false };
+  var RECALL_PICKS = [['today', 'Heute (später)'], ['1d', 'Morgen'], ['2d', '+2 Tage'], ['3d', '+3 Tage'], ['eow', 'Ende der Woche'],
+    ['1w', '1 Woche'], ['2w', '2 Wochen'], ['3w', '3 Wochen'], ['4w', '4 Wochen'], ['none', 'unbekannt']];
   var RECALL_KEYS = RECALL_PICKS.map(function (p) { return p[0]; });
 
   function buildTypeChips(box, onPick) {
@@ -685,13 +794,52 @@
   function buildSeg(box, options, onPick, cls) {
     clear(box);
     options.forEach(function (o) {
-      var b = h('button', { type: 'button', class: 'seg-btn' + (cls ? ' ' + cls : ''), role: 'radio', 'aria-checked': 'false', 'data-val': o[0] }, o[1]);
+      var b = h('button', { type: 'button', class: 'seg-btn' + (cls ? ' ' + cls : ''), role: 'radio', 'aria-checked': 'false', 'data-val': o[0], title: o[2] || null, 'aria-label': o[2] || null }, o[1]);
       b.addEventListener('click', function () { onPick(o[0]); });
       box.appendChild(b);
     });
+    // Ein Tab-Stopp je Gruppe; Pfeiltasten wechseln zwischen den Knöpfen
+    if (!box._roving) {
+      box._roving = true;
+      box.addEventListener('keydown', function (e) {
+        var keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+        if (!(e.key in keys) || e.altKey) return;
+        var btns = Array.prototype.slice.call(box.querySelectorAll('.seg-btn'));
+        var i = btns.indexOf(doc.activeElement);
+        if (i < 0) return;
+        e.preventDefault();
+        var n = (i + keys[e.key] + btns.length) % btns.length;
+        btns.forEach(function (b, k) { b.tabIndex = k === n ? 0 : -1; });
+        btns[n].focus();
+      });
+    }
   }
   function paintSeg(box, val) {
+    var any = null;
     Array.prototype.forEach.call(box.querySelectorAll('.seg-btn'), function (b) {
+      var on = b.getAttribute('data-val') === val;
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+      b.classList.toggle('on', on);
+      if (on) any = b;
+    });
+    var btns = box.querySelectorAll('.seg-btn');
+    Array.prototype.forEach.call(btns, function (b) { b.tabIndex = (any ? b === any : b === btns[0]) ? 0 : -1; });
+  }
+
+  var IMPORTANCE_OPTS = [['0', 'normal', 'Wichtigkeit: normal'], ['1', '★', 'Wichtig (1 Stern)'], ['2', '★★', 'Sehr wichtig (2 Sterne)']];
+
+  // Aufwand L/M/S: Kästchen zum Ankreuzen, höchstens eines, erneutes Klicken entfernt
+  function buildEffort(box, onPick) {
+    clear(box);
+    M.EFFORT.forEach(function (e) {
+      var b = h('button', { type: 'button', class: 'eff-box', role: 'checkbox', 'aria-checked': 'false', 'data-val': e, title: M.EFFORT_LABEL[e], 'aria-label': 'Aufwand ' + M.EFFORT_LABEL[e] },
+        [h('span', { class: 'box', 'aria-hidden': 'true' }), h('span', null, e)]);
+      b.addEventListener('click', function () { onPick(e); });
+      box.appendChild(b);
+    });
+  }
+  function paintEffort(box, val) {
+    Array.prototype.forEach.call(box.querySelectorAll('.eff-box'), function (b) {
       var on = b.getAttribute('data-val') === val;
       b.setAttribute('aria-checked', on ? 'true' : 'false');
       b.classList.toggle('on', on);
@@ -721,14 +869,15 @@
     paintSeg($('qRecallPicks'), Q.recallPick);
     if (Q.recallPick === 'none') $('qRecallDate').value = '';
     else if (Q.recallPick !== 'date') $('qRecallDate').value = D.pick(D.today(), Q.recallPick);
-    paintToggle($('qImportant'), Q.important, 'Wichtig');
+    paintSeg($('qImportance'), String(Q.importance));
+    paintEffort($('qEffort'), Q.effort);
   }
 
   function saveDraft() {
     try {
       root.localStorage.setItem(DRAFT_KEY, JSON.stringify({
         title: $('qTitle').value, patient: $('qPatient').value, type: Q.type, recallPick: Q.recallPick,
-        recallDate: $('qRecallDate').value, deadline: $('qDeadline').value, important: Q.important
+        recallDate: $('qRecallDate').value, deadline: $('qDeadline').value, importance: Q.importance, effort: Q.effort
       }));
     } catch (e) { /* Entwurf nicht speicherbar */ }
   }
@@ -743,13 +892,14 @@
     Q.recallPick = (RECALL_KEYS.indexOf(d.recallPick) >= 0 || d.recallPick === 'date') ? d.recallPick : '1w';
     if (Q.recallPick === 'date' && D.isValid(d.recallDate)) $('qRecallDate').value = d.recallDate;
     $('qDeadline').value = D.isValid(d.deadline) ? d.deadline : '';
-    Q.important = !!d.important;
+    Q.importance = d.importance === 1 || d.importance === 2 ? d.importance : (d.important ? 1 : 0);
+    Q.effort = M.EFFORT.indexOf(d.effort) >= 0 ? d.effort : null;
   }
 
   function resetQuick() {
     $('qTitle').value = '';
     Q.picker.reset();
-    Q.type = null; Q.recallPick = '1w'; Q.important = false;
+    Q.type = null; Q.recallPick = '1w'; Q.importance = 0; Q.effort = null;
     $('qDeadline').value = '';
     paintQuick();
     clearDraft();
@@ -776,7 +926,7 @@
     try {
       var out = await A.create({
         title: title, type: type, typeAuto: !Q.type, patient: patient, recall: recall,
-        deadline: deadlineVal || null, important: Q.important
+        deadline: deadlineVal || null, important: Q.importance, effort: Q.effort
       });
       var id = out.created.id;
       S.ui.highlightId = id;
@@ -813,7 +963,7 @@
     var quickBox = doc.querySelector('.quick');
     function quickActive() {
       var inside = quickBox.contains(doc.activeElement);
-      var hasContent = $('qTitle').value.trim() || $('qPatient').value.trim() || $('qDeadline').value || Q.important || Q.type || Q.recallPick !== '1w';
+      var hasContent = $('qTitle').value.trim() || $('qPatient').value.trim() || $('qDeadline').value || Q.importance || Q.effort || Q.type || Q.recallPick !== '1w';
       quickBox.classList.toggle('active', !!(inside || hasContent));
     }
     quickBox.addEventListener('focusin', quickActive);
@@ -829,7 +979,8 @@
     });
     $('qDeadline').addEventListener('change', saveDraft);
     $('qDeadlineClear').addEventListener('click', function () { $('qDeadline').value = ''; saveDraft(); $('qDeadline').focus(); });
-    $('qImportant').addEventListener('click', function () { Q.important = !Q.important; paintQuick(); saveDraft(); });
+    buildSeg($('qImportance'), IMPORTANCE_OPTS, function (v) { Q.importance = Number(v); paintQuick(); saveDraft(); });
+    buildEffort($('qEffort'), function (e) { Q.effort = Q.effort === e ? null : e; paintQuick(); saveDraft(); });
     // Enter in Datumsfeldern speichert ebenfalls
     ['qRecallDate', 'qDeadline'].forEach(function (id) {
       $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveQuick(); } });
@@ -876,7 +1027,7 @@
   // ---------- Bearbeiten ----------
   // dirty: Felder, die in diesem Fenster geändert wurden – nur diese werden gespeichert. So überschreibt
   // ein offenes Bearbeitungsfenster keine zwischenzeitlich synchronisierten Änderungen anderer Felder.
-  var E = { id: null, origRecall: null, postponeCounted: false, type: null, typeAuto: false, important: false, status: 'open', picker: null, saveTimer: null, saving: Promise.resolve(), dirty: {} };
+  var E = { id: null, origRecall: null, postponeCounted: false, type: null, typeAuto: false, important: 0, effort: null, status: 'open', picker: null, saveTimer: null, saving: Promise.resolve(), dirty: {} };
   function markDirty(f) { E.dirty[f] = true; }
   var STATUS_OPTS = [['open', 'Offen'], ['done', 'Erledigt']];
 
@@ -891,7 +1042,8 @@
     if (val == null || val === '') return '(leer)';
     if (field === 'patientId') return (S.view && S.view.display[val]) || '(unbekannt)';
     if (field === 'type') return M.typeLabel(val);
-    if (field === 'important') return val ? 'Ja' : 'Nein';
+    if (field === 'important') return M.IMPORTANCE_LABEL[M.importance({ important: val })];
+    if (field === 'effort') return val ? M.EFFORT_LABEL[val] || String(val) : '(leer)';
     if (field === 'recall' || field === 'deadline') return D.isValid(val) ? D.fmt(val) : String(val);
     if (field === 'status') return M.STATUS_LABEL[val] || String(val);
     return String(val);
@@ -936,7 +1088,8 @@
     if (!d.type) { E.type = t.v.type; E.typeAuto = !!t.v.typeAuto; paintTypeChips($('eTypes'), E.type, false); }
     if (!d.recall) $('eRecall').value = t.v.recall || '';
     if (!d.deadline) $('eDeadline').value = t.v.deadline || '';
-    if (!d.important) { E.important = !!t.v.important; paintToggle($('eImportant'), E.important, 'Wichtig'); }
+    if (!d.important) { E.important = M.importance(t.v); paintSeg($('eImportance'), String(E.important)); }
+    if (!d.effort) { E.effort = M.effort(t.v); paintEffort($('eEffort'), E.effort); }
     if (!d.status) { E.status = t.v.status === 'done' ? 'done' : 'open'; paintSeg($('eStatus'), E.status); }
     var loc = S.local.get(t.id);
     if (!d.note) $('eNote').value = loc && loc.note ? loc.note : '';
@@ -944,7 +1097,7 @@
     $('eNoteHidden').hidden = !$('eNoteField').hidden;
     renderEditConflicts(t);
     var pc = M.postponeCount(t);
-    $('eMeta').textContent = 'Erstellt ' + D.fmtDateTime(t.v.createdAt) + ' · Geändert ' + D.fmtDateTime(t.u) +
+    $('eMeta').textContent = 'Erstellt am ' + D.fmtDateTime(t.v.createdAt) + ' · Geändert ' + D.fmtDateTime(t.u) +
       (pc ? ' · ' + pc + '× verschoben' : '') + (t.v.typeAuto ? ' · Art automatisch erkannt' : '');
   }
 
@@ -983,7 +1136,7 @@
     if (!t) return;
     var ch = {};
     var dirty = E.dirty;
-    var snap = { title: $('eTitle').value, patient: $('ePatient').value, recall: $('eRecall').value, deadline: $('eDeadline').value, note: $('eNote').value, type: E.type, important: E.important, status: E.status };
+    var snap = { title: $('eTitle').value, patient: $('ePatient').value, recall: $('eRecall').value, deadline: $('eDeadline').value, note: $('eNote').value, type: E.type, important: E.important, effort: E.effort, status: E.status };
     var title = $('eTitle').value.trim();
     if (dirty.title) {
       if (!title) { setSaveState('Titel darf nicht leer sein – nicht gespeichert.', 'error'); return; }
@@ -1010,7 +1163,8 @@
       if (dv && !saneDate(dv)) { setSaveState('Frist: bitte ein gültiges Datum eingeben.', 'error'); return; }
       ch.deadline = dv || null;
     }
-    if (dirty.important && E.important !== !!t.v.important) ch.important = E.important;
+    if (dirty.important && E.important !== M.importance(t.v)) ch.important = E.important;
+    if (dirty.effort && E.effort !== M.effort(t.v)) ch.effort = E.effort;
     var curStatus = t.v.status === 'done' ? 'done' : 'open';
     if (dirty.status && E.status !== curStatus) ch.status = E.status;
     var loc = S.local.get(id);
@@ -1026,7 +1180,7 @@
       if (noteChanged) await A.setLocal(id, { note: note || null });
       // gespeicherte Felder sind nicht mehr "in Bearbeitung" (sofern seither nicht weiter getippt)
       if (E.id === id) {
-        var cur = { title: $('eTitle').value, patient: $('ePatient').value, recall: $('eRecall').value, deadline: $('eDeadline').value, note: $('eNote').value, type: E.type, important: E.important, status: E.status };
+        var cur = { title: $('eTitle').value, patient: $('ePatient').value, recall: $('eRecall').value, deadline: $('eDeadline').value, note: $('eNote').value, type: E.type, important: E.important, effort: E.effort, status: E.status };
         Object.keys(dirty).forEach(function (k) { if (cur[k] === snap[k]) delete E.dirty[k]; });
       }
       setSaveState('Gespeichert', 'ok');
@@ -1062,7 +1216,8 @@
       scheduleEditSave(0);
     }, 'small');
     buildSeg($('eStatus'), STATUS_OPTS, function (v) { E.status = v; markDirty('status'); paintSeg($('eStatus'), v); scheduleEditSave(0); });
-    $('eImportant').addEventListener('click', function () { E.important = !E.important; markDirty('important'); paintToggle($('eImportant'), E.important, 'Wichtig'); scheduleEditSave(0); });
+    buildSeg($('eImportance'), IMPORTANCE_OPTS, function (v) { E.important = Number(v); markDirty('important'); paintSeg($('eImportance'), v); scheduleEditSave(0); });
+    buildEffort($('eEffort'), function (e) { E.effort = E.effort === e ? null : e; markDirty('effort'); paintEffort($('eEffort'), E.effort); scheduleEditSave(0); });
     $('eTitle').addEventListener('input', function () { markDirty('title'); scheduleEditSave(); });
     $('eTitle').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); flushEdit().then(closeEdit); } });
     $('eRecall').addEventListener('change', function () { markDirty('recall'); scheduleEditSave(600); });
@@ -1207,6 +1362,7 @@
         kv('↑ ↓', 'In der Liste bewegen'),
         kv('E', 'Erledigt'),
         kv('T · W · M', '+1 Tag · +1 Woche · +1 Monat'),
+        kv('Alt + ↑ ↓', 'Aufgabe nach oben/unten schieben (oben = als Nächstes)'),
         kv('Entf', 'Löschen (mit Rückgängig)'),
         kv('Esc', 'Bearbeitung schließen · Suche leeren')
       ]),
@@ -1704,6 +1860,11 @@
   function onKey(e) {
     if (e.defaultPrevented || e.isComposing) return;
     if (doc.querySelector('dialog[open]')) return;
+    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      var r0 = e.target && e.target.closest ? e.target.closest('.task') : null;
+      if (r0 && e.target === r0 && !r0.getAttribute('data-done')) { e.preventDefault(); moveRow(r0, e.key === 'ArrowUp' ? -1 : 1); }
+      return;
+    }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     var t = e.target;
     var editable = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
@@ -1751,6 +1912,7 @@
     initFilters();
     initEdit();
     $('list').addEventListener('click', onListClick);
+    initDrag();
     doc.addEventListener('keydown', onKey);
     Ctl.onStatus = function () {
       renderBackupPill();

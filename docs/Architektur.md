@@ -1,6 +1,6 @@
 # Wiedervorlage – Technische Architektur (Entwurf Etappe 1)
 
-Stand: 10.11.2026 · Status: Etappe 2 und 4 umgesetzt (lokal + verschlüsselte Synchronisation), Etappe 3 offen
+Stand: 24.11.2026 · Status: Version 2.0.0 (Etappen 2 und 4 + Erweiterungen Version 2), Etappe 3 offen
 
 Dieses Dokument ist die technische Referenz für die Umsetzung. Die verständliche Fassung mit Empfehlung und Einrichtungsschritten steht in der Antwort im Chat.
 
@@ -72,7 +72,9 @@ Lokal liegen die Daten unverschlüsselt im Browserprofil (Klinik-PC: Windows-Ben
 | `patientId` | UUID \| null | Verweis auf `patients` |
 | `recall` | `YYYY-MM-DD` \| null | Wiedervorlage, Kalenderdatum ohne Uhrzeit; null = unbekannt |
 | `deadline` | `YYYY-MM-DD` \| null | Frist |
-| `important` | Bool | Standard `false` |
+| `important` | 0 \| 1 \| 2 | Wichtigkeit (normal, ★, ★★); ältere Daten `true` = 1 |
+| `effort` | `L` \| `M` \| `S` \| null | Aufwand leicht/mittel/schwer |
+| `rank` | Zahl \| null | eigene Reihenfolge im Bereich (oben = als Nächstes); bei Verschieben/Erledigen aufgehoben; gleichzeitige Änderung ohne Konfliktdialog |
 | `status` | Enum | `open`, `waiting`, `done` |
 | `createdAt` | ISO-UTC | |
 | `updatedAt` | ISO-UTC | nur Anzeige, nicht für Konfliktlogik |
@@ -231,11 +233,12 @@ Bereiche (nur `open`/`waiting`, nicht gelöscht):
 
 Unterbereich „Länger überfällig“ (eingeklappt, in allen Zählern enthalten): `d(recall) < −7`, nicht wichtig, keine Frist innerhalb von 3 Tagen, kein Konflikt.
 
-Fristfarbe: `d ≤ 0` rot · `1–3` gelb · sonst neutral.
+Fristmeldung: `d < 0` „Frist abgelaufen!“ · `d = 0` „Frist läuft heute ab!“ (beide rot) · `1–3` „Frist nähert sich!“ (gelb) · sonst neutral.
 
 Sortierschlüssel (alle Bereiche, stabil):
+0. Eigene Reihenfolge (`rank`, falls gesetzt) – manuell platzierte Aufgaben zuerst
 1. Fristdringlichkeit: `d ≤ 0` → 0 · `1–2` → 1 · `3` → 2 · sonst 3
-2. Wichtig vor nicht wichtig
+2. Wichtigkeit absteigend (★★, ★, normal)
 3. Wiedervorlage aufsteigend
 4. Frist aufsteigend (ohne Frist zuletzt)
 5. Erstellungszeitpunkt, dann ID

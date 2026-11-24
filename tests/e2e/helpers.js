@@ -61,7 +61,8 @@ async function quickAdd(page, title, o = {}) {
   }
   if (o.recall) await page.click(`#qRecallPicks [data-val="${o.recall}"]`);
   if (o.deadline) await page.fill('#qDeadline', o.deadline);
-  if (o.important) await page.click('#qImportant');
+  if (o.important) await page.click(`#qImportance [data-val="${o.important === true ? 1 : o.important}"]`);
+  if (o.effort) await page.click(`#qEffort [data-val="${o.effort}"]`);
   if (o.type) await page.click(`#qTypes [data-type="${o.type}"]`);
   await page.press(o.patient ? '#qPatient' : '#qTitle', 'Enter');
   await page.waitForFunction((t) => document.getElementById('qTitle').value === '' &&
@@ -75,7 +76,7 @@ async function seed(page, tasks) {
       await WV.actions.create({
         title: t.title, type: t.type || WV.model.detectType(t.title), typeAuto: !t.type,
         patient: t.patient ? (t.patientId ? { id: t.patientId } : { newLabel: t.patient }) : null,
-        recall: t.recall, deadline: t.deadline || null, important: !!t.important, note: t.note || null
+        recall: t.recall, deadline: t.deadline || null, important: t.important === true ? 1 : (t.important || 0), effort: t.effort || null, note: t.note || null
       });
     }
     WV.ui.render();

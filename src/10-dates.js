@@ -79,7 +79,10 @@
 
   // Schnellwahl in der Eingabe (ab heute); 'none' = Datum unbekannt
   D.pick = function (today, key) {
+    if (key === 'today') return today;
     if (key === '1d') return D.addDays(today, 1);
+    if (key === '2d') return D.addDays(today, 2);
+    if (key === '3d') return D.addDays(today, 3);
     if (key === 'eow') return D.endOfWeek(today);
     if (key === '1w') return D.addDays(today, 7);
     if (key === '2w') return D.addDays(today, 14);
@@ -108,12 +111,20 @@
     return D.fmtShort(s, today);
   };
 
+  // Fristmeldung: abgelaufen / läuft heute ab / nähert sich (1–3 Tage) / neutral
   D.relDeadline = function (s, today) {
     var d = D.diff(s, today);
-    if (d < 0) return 'Frist überschritten (' + s.slice(8, 10) + '.' + s.slice(5, 7) + '.)';
-    if (d === 0) return 'Frist heute';
-    if (d === 1) return 'Frist morgen';
+    if (d < 0) return 'Frist abgelaufen! (' + s.slice(8, 10) + '.' + s.slice(5, 7) + '.)';
+    if (d === 0) return 'Frist läuft heute ab!';
+    if (d <= 3) return 'Frist nähert sich! (' + (d === 1 ? 'morgen' : D.fmtShort(s, today)) + ')';
     return 'Frist ' + D.fmtShort(s, today);
+  };
+
+  D.fmtDay = function (iso, today) { // Erstelldatum kurz: 10.11. bzw. 10.11.2025
+    if (!iso) return '';
+    var d = D.fromLocalDate(new Date(iso));
+    if (today && d.slice(0, 4) !== today.slice(0, 4)) return D.fmt(d);
+    return d.slice(8, 10) + '.' + d.slice(5, 7) + '.';
   };
 
   D.fmtDateTime = function (iso) {

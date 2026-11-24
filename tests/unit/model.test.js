@@ -220,3 +220,44 @@ test('Doku ist die erste Aufgabenart', () => {
   assert.equal(M.TYPES[M.TYPES.length - 1].id, 'sonstiges');
   assert.equal(M.TYPES.length, 13);
 });
+
+test('Wichtigkeit mit zwei Stufen: ★★ vor ★ vor normal; ältere Daten (true) = ★', () => {
+  const today = '2026-11-10';
+  const items = [
+    task({ title: 'normal', recall: '2026-11-10' }),
+    task({ title: 'wichtig', recall: '2026-11-10', important: 1 }),
+    task({ title: 'sehr wichtig', recall: '2026-11-10', important: 2 }),
+    task({ title: 'alt-wichtig', recall: '2026-11-09', important: true })
+  ];
+  assert.equal(M.importance(items[3].v), 1);
+  const v = M.buildView(items, [], {}, { today });
+  assert.deepEqual(v.sections.today.map((i) => i.task.v.title), ['sehr wichtig', 'alt-wichtig', 'wichtig', 'normal']);
+  assert.equal(M.buildView(items, [], {}, { today, fImportant: true }).sections.today.length, 3);
+  // Frist geht weiterhin vor Wichtigkeit
+  const f = task({ title: 'Frist heute', recall: '2026-11-10', deadline: '2026-11-10' });
+  assert.equal(M.buildView(items.concat([f]), [], {}, { today }).sections.today[0].task.v.title, 'Frist heute');
+});
+
+test('Eigene Reihenfolge: manuell platzierte Aufgaben zuerst, Rest automatisch', () => {
+  const today = '2026-11-10';
+  let a = task({ title: 'A Frist heute', recall: '2026-11-10', deadline: '2026-11-10' });
+  let b = task({ title: 'B normal', recall: '2026-11-10' });
+  let c = task({ title: 'C sehr wichtig', recall: '2026-11-10', important: 2 });
+  b = M.write(b, { rank: 10 }, ctx());
+  c = M.write(c, { rank: 20 }, ctx());
+  const v = M.buildView([a, b, c], [], {}, { today });
+  assert.deepEqual(v.sections.today.map((i) => i.task.v.title), ['B normal', 'C sehr wichtig', 'A Frist heute']);
+  // gleichzeitige Umsortierung auf zwei Geräten erzeugt keinen Konfliktdialog
+  const x = M.write(a, { rank: 5 }, { dev: 'x', c: 900, t: '2026-11-10T10:00:00.000Z' });
+  const y = M.write(a, { rank: 7 }, { dev: 'y', c: 900, t: '2026-11-10T10:00:01.000Z' });
+  const r = WV.merge.mergeRecord(x, y, M.TASK_FIELDS, true);
+  assert.equal(M.openConflicts(r.rec).length, 0);
+  assert.equal(r.rec.v.rank, 7);
+});
+
+test('Aufwand L/M/S', () => {
+  const t = task({ title: 'x', recall: '2026-11-10', effort: 'S' });
+  assert.equal(M.effort(t.v), 'S');
+  assert.equal(M.EFFORT_LABEL[M.effort(t.v)], 'schwer');
+  assert.equal(M.effort(task({ title: 'y', recall: '2026-11-10', effort: 'X' }).v), null);
+});

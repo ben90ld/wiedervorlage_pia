@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-o8IMCIpZeMcSjljQEESd0TMxoBsDCX1qSCvLv+foDpw='; style-src 'sha256-T8UBUDgZcrEvvFJvMhVeHunYOSOL48E+nvyCt4ibrcY='; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-+tevrT1dOowJaxUW46Je/IaROPM475jv0A0qn6BNe0Y='; style-src 'sha256-F2Sw6iKpMlqeCwX66KFllXb7nsdUs9HpaXwcYpkNyL8='; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
 <meta name="theme-color" content="#e9f2f8" media="(prefers-color-scheme: light)">
@@ -61,6 +61,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .dl-over, :root:not([data-theme="light"]) .dl-today { color: #1b1010; }
   :root:not([data-theme="light"]) {
     --bg: #131a20; --surface: #1b242c; --surface-2: #212c35; --border: #31404c; --border-strong: #435665;
     --text: #e2ebf1; --text-2: #b3c2ce; --muted: #8ea0ae;
@@ -288,8 +289,8 @@ details.sub > summary { font-size: 13.5px; color: var(--text-2); padding: 6px 4p
 
 .task {
   display: grid;
-  grid-template-columns: 34px 30px minmax(0, 1fr) auto auto;
-  grid-template-areas: "done type main meta acts";
+  grid-template-columns: 16px 34px 30px minmax(0, 1fr) auto auto;
+  grid-template-areas: "drag done type main meta acts";
   align-items: center;
   column-gap: 8px;
   padding: 5px 10px 5px 8px;
@@ -303,6 +304,27 @@ details.sub > summary { font-size: 13.5px; color: var(--text-2); padding: 6px 4p
 .task:focus-visible { outline-offset: -2px; }
 .task.is-new { background: var(--new); }
 .task.is-important { box-shadow: inset 3px 0 0 var(--yellow); }
+.task.is-very-important { box-shadow: inset 5px 0 0 var(--yellow); }
+.drag { grid-area: drag; display: inline-flex; align-items: center; justify-content: center; color: var(--border-strong); cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; height: 28px; }
+.drag .ico { width: 16px; height: 16px; }
+.task:hover .drag, .task:focus-within .drag { color: var(--muted); }
+.task.is-ranked .drag { color: var(--primary); }
+.task.dragging { outline: 2px dashed var(--primary); outline-offset: -2px; background: var(--primary-soft); }
+body.is-dragging, body.is-dragging * { cursor: grabbing !important; user-select: none; }
+.reset-order { margin-left: auto; }
+.imp-2 .ico + .ico { margin-left: -4px; }
+.eff { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 5px; border: 1px solid var(--border-strong); font-size: 12px; font-weight: 700; color: var(--text-2); background: var(--surface-2); }
+.eff-S { border-color: var(--t-befund); color: var(--t-befund); }
+.eff-M { border-color: var(--t-antrag); color: var(--t-antrag); }
+.eff-L { border-color: var(--t-rueckruf); color: var(--t-rueckruf); }
+.created { color: var(--muted); font-size: 12px; }
+.effort { display: inline-flex; gap: 4px; }
+.eff-box { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border-strong); background: var(--surface); border-radius: var(--radius-s); padding: 3px 9px; min-height: 32px; cursor: pointer; color: var(--text-2); font-weight: 600; }
+.eff-box .box { width: 14px; height: 14px; border: 2px solid var(--border-strong); border-radius: 3px; display: inline-block; position: relative; }
+.eff-box.on { border-color: var(--primary); color: var(--primary); background: var(--primary-soft); }
+.eff-box.on .box { border-color: var(--primary); background: var(--primary); }
+.eff-box.on .box::after { content: ""; position: absolute; left: 3px; top: 0; width: 4px; height: 8px; border: solid var(--primary-text); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.recall-date { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 .task.dl-urgent { box-shadow: inset 3px 0 0 var(--red); }
 .task.has-conflict { box-shadow: inset 3px 0 0 var(--primary); }
 .done-btn { grid-area: done; width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--border-strong); background: var(--surface); color: transparent; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
@@ -314,11 +336,12 @@ details.sub > summary { font-size: 13.5px; color: var(--text-2); padding: 6px 4p
 .task-main { grid-area: main; min-width: 0; }
 .task-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .task-line .badge { flex: none; }
-.task-line .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-line { flex-wrap: wrap; row-gap: 2px; }
+.task-line .title { white-space: normal; overflow-wrap: anywhere; }
 .pat { flex: none; font-size: 13px; font-weight: 600; color: var(--primary); background: var(--primary-soft); padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
 .imp { color: var(--yellow); display: inline-flex; }
 .imp .ico { width: 15px; height: 15px; }
-.task-meta { grid-area: meta; display: grid; grid-template-columns: 118px 196px; align-items: center; gap: 6px; white-space: nowrap; font-size: 13px; }
+.task-meta { grid-area: meta; display: grid; grid-template-columns: 92px 112px 236px; align-items: center; gap: 6px; white-space: nowrap; font-size: 13px; }
 .dl-slot { display: flex; }
 .c-s, .a-short { display: none; }
 .f-toggle { display: none; }
@@ -327,8 +350,10 @@ details.sub > summary { font-size: 13.5px; color: var(--text-2); padding: 6px 4p
 .recall.overdue { color: var(--red); font-weight: 600; }
 .recall.due { color: var(--text); font-weight: 600; }
 .dl { white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border); }
-.dl-red { background: var(--red-soft); color: var(--red); border-color: transparent; font-weight: 600; }
-.dl-yellow { background: var(--yellow-soft); color: var(--yellow); border-color: transparent; font-weight: 600; }
+.dl-over, .dl-today { background: var(--red); color: #fff; border-color: transparent; font-weight: 700; }
+.dl-soon { background: var(--yellow-soft); color: var(--yellow); border-color: var(--yellow); font-weight: 700; }
+.dl-neutral { background: var(--surface-2); color: var(--text-2); }
+:root[data-theme="dark"] .dl-over, :root[data-theme="dark"] .dl-today { color: #1b1010; }
 .badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); color: var(--text-2); font-size: 12px; }
 .b-conflict { background: var(--primary-soft); color: var(--primary); border-color: transparent; font-weight: 600; }
 .acts { grid-area: acts; display: flex; gap: 4px; align-items: center; }
@@ -402,9 +427,10 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
 }
 
 @media (max-width: 900px) {
-  .task { grid-template-columns: 34px 30px minmax(0, 1fr) auto; grid-template-areas: "done type main acts" "done type meta acts"; row-gap: 2px; padding-top: 6px; padding-bottom: 6px; }
-  .task-meta { display: flex; flex-wrap: wrap; white-space: normal; }
+  .task { grid-template-columns: 16px 34px 30px minmax(0, 1fr) auto; grid-template-areas: "drag done type main acts" "drag done type meta acts"; row-gap: 2px; padding-top: 6px; padding-bottom: 6px; }
+  .task-meta { display: flex; flex-wrap: wrap; white-space: normal; gap: 4px 8px; }
   .dl-slot:empty { display: none; }
+  .dl { white-space: normal; }
 }
 
 @media (max-width: 640px), (pointer: coarse) and (max-width: 900px) {
@@ -438,7 +464,10 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
   .chip { min-height: 38px; }
   .quick-types { align-items: flex-start; flex-direction: column; gap: 4px; }
   .quick-types .chips { width: 100%; }
-  .task { grid-template-columns: 40px 28px minmax(0, 1fr) auto; grid-template-areas: "done type main main" "done type meta acts"; padding: 8px 8px 8px 6px; row-gap: 4px; column-gap: 6px; }
+  .task { grid-template-columns: 22px 40px 28px minmax(0, 1fr); grid-template-areas: "drag done type main" "drag done type meta" "drag done type acts"; padding: 8px 8px 8px 2px; row-gap: 5px; column-gap: 6px; }
+  .acts { justify-self: end; }
+  .drag { height: 44px; width: 22px; }
+  .eff-box { min-height: 40px; padding: 4px 11px; }
   .quick:not(.active) .quick-opts, .quick:not(.active) .quick-types, .quick:not(.active) #qPatientHint { display: none; }
   .f-toggle { display: inline-flex; min-height: 40px; }
   .search { flex: 1 1 0; min-width: 0; }
@@ -501,21 +530,25 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
             <ul id="qPatientList" class="suggest" role="listbox" aria-label="Patientenvorschläge" hidden></ul>
           </div>
         </div>
-        <div class="opt opt-recall">
-          <span class="opt-label" id="qRecallLabel">Wiedervorlage</span>
-          <div class="seg pills" id="qRecallPicks" role="radiogroup" aria-labelledby="qRecallLabel"></div>
-          <input id="qRecallDate" type="date" aria-label="Wiedervorlage: Datum">
-        </div>
         <div class="opt opt-deadline">
-          <label class="opt-label" for="qDeadline">Frist</label>
+          <label class="opt-label" for="qDeadline">Frist bis (optional)</label>
           <div class="date-clear">
             <input id="qDeadline" type="date">
             <button type="button" class="icon-btn small" id="qDeadlineClear" aria-label="Frist entfernen" title="Frist entfernen"></button>
           </div>
         </div>
-        <div class="opt opt-important">
-          <span class="opt-label" aria-hidden="true">&nbsp;</span>
-          <button type="button" class="toggle" id="qImportant" aria-pressed="false"></button>
+        <div class="opt opt-importance">
+          <span class="opt-label" id="qImportanceLabel">Wichtigkeit</span>
+          <div class="seg" id="qImportance" role="radiogroup" aria-labelledby="qImportanceLabel"></div>
+        </div>
+        <div class="opt opt-effort">
+          <span class="opt-label" id="qEffortLabel">Aufwand</span>
+          <div class="effort" id="qEffort" role="group" aria-labelledby="qEffortLabel"></div>
+        </div>
+        <div class="opt opt-recall">
+          <span class="opt-label" id="qRecallLabel">Wiedervorlage</span>
+          <div class="seg pills" id="qRecallPicks" role="radiogroup" aria-labelledby="qRecallLabel"></div>
+          <label class="recall-date"><span>oder am</span><input id="qRecallDate" type="date" aria-label="Wiedervorlage am (Datum)"></label>
         </div>
       </div>
       <div class="hint-line" id="qPatientHint" aria-live="polite"></div>
@@ -570,7 +603,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     </div>
     <div class="row2">
       <div class="field">
-        <label class="opt-label" for="eRecall">Wiedervorlage</label>
+        <label class="opt-label" for="eRecall">Wiedervorlage am</label>
         <div class="date-clear">
           <input id="eRecall" type="date">
           <button type="button" class="icon-btn small" id="eRecallClear" aria-label="Wiedervorlage: Datum unbekannt" title="Datum unbekannt"></button>
@@ -578,7 +611,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
         <div class="seg small" id="eRecallPicks" aria-label="Verschieben"></div>
       </div>
       <div class="field">
-        <label class="opt-label" for="eDeadline">Frist</label>
+        <label class="opt-label" for="eDeadline">Frist bis</label>
         <div class="date-clear">
           <input id="eDeadline" type="date">
           <button type="button" class="icon-btn small" id="eDeadlineClear" aria-label="Frist entfernen" title="Frist entfernen"></button>
@@ -588,8 +621,10 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     </div>
     <div class="row2">
       <div class="field">
-        <span class="opt-label">Markierung</span>
-        <button type="button" class="toggle" id="eImportant" aria-pressed="false"></button>
+        <span class="opt-label" id="eImportanceLabel">Wichtigkeit</span>
+        <div class="seg" id="eImportance" role="radiogroup" aria-labelledby="eImportanceLabel"></div>
+        <span class="opt-label" id="eEffortLabel">Aufwand</span>
+        <div class="effort" id="eEffort" role="group" aria-labelledby="eEffortLabel"></div>
       </div>
       <div class="field">
         <span class="opt-label" id="eStatusLabel">Status</span>
@@ -617,14 +652,14 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
 <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
 <noscript><p class="noscript">Für die Wiedervorlage muss JavaScript aktiviert sein.</p></noscript>
 <div class="overlay" id="overlay" hidden><div class="overlay-box" id="overlayText">Verbinde mit Google …</div></div>
-<script>/*! Wiedervorlage 0.4.0 – erzeugt aus src/ (00-base.js, 10-dates.js, 20-model.js, 30-merge.js, 40-crypto.js, 45-format.js, 50-db.js, 55-auth.js, 56-drive.js, 60-backup.js, 65-sync.js, 70-icons.js, 80-ui.js, 90-main.js) */
+<script>/*! Wiedervorlage 2.0.0 – erzeugt aus src/ (00-base.js, 10-dates.js, 20-model.js, 30-merge.js, 40-crypto.js, 45-format.js, 50-db.js, 55-auth.js, 56-drive.js, 60-backup.js, 65-sync.js, 70-icons.js, 80-ui.js, 90-main.js) */
 
 /* ---- 00-base.js ---- */
 /* Wiedervorlage – Basis und Hilfsfunktionen */
 (function (root) {
   'use strict';
   var WV = root.WV = root.WV || {};
-  WV.VERSION = '0.4.0';
+  WV.VERSION = '2.0.0';
   WV.SCHEMA = 1;
 
   var u = WV.util = {};
@@ -779,7 +814,10 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
 
   // Schnellwahl in der Eingabe (ab heute); 'none' = Datum unbekannt
   D.pick = function (today, key) {
+    if (key === 'today') return today;
     if (key === '1d') return D.addDays(today, 1);
+    if (key === '2d') return D.addDays(today, 2);
+    if (key === '3d') return D.addDays(today, 3);
     if (key === 'eow') return D.endOfWeek(today);
     if (key === '1w') return D.addDays(today, 7);
     if (key === '2w') return D.addDays(today, 14);
@@ -808,12 +846,20 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     return D.fmtShort(s, today);
   };
 
+  // Fristmeldung: abgelaufen / läuft heute ab / nähert sich (1–3 Tage) / neutral
   D.relDeadline = function (s, today) {
     var d = D.diff(s, today);
-    if (d < 0) return 'Frist überschritten (' + s.slice(8, 10) + '.' + s.slice(5, 7) + '.)';
-    if (d === 0) return 'Frist heute';
-    if (d === 1) return 'Frist morgen';
+    if (d < 0) return 'Frist abgelaufen! (' + s.slice(8, 10) + '.' + s.slice(5, 7) + '.)';
+    if (d === 0) return 'Frist läuft heute ab!';
+    if (d <= 3) return 'Frist nähert sich! (' + (d === 1 ? 'morgen' : D.fmtShort(s, today)) + ')';
     return 'Frist ' + D.fmtShort(s, today);
+  };
+
+  D.fmtDay = function (iso, today) { // Erstelldatum kurz: 10.11. bzw. 10.11.2025
+    if (!iso) return '';
+    var d = D.fromLocalDate(new Date(iso));
+    if (today && d.slice(0, 4) !== today.slice(0, 4)) return D.fmt(d);
+    return d.slice(8, 10) + '.' + d.slice(5, 7) + '.';
   };
 
   D.fmtDateTime = function (iso) {
@@ -906,16 +952,30 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
 
   // ---------- Felder ----------
   M.TASK_FIELDS = ['title', 'type', 'typeAuto', 'patientId', 'recall', 'deadline', 'important',
-    'status', 'doneAt', 'deleted', 'purged', 'createdAt', 'lastPostponedAt', 'recurrence'];
+    'status', 'doneAt', 'deleted', 'purged', 'createdAt', 'lastPostponedAt', 'recurrence', 'rank', 'effort'];
   M.PATIENT_FIELDS = ['label', 'createdAt', 'deleted'];
   // Felder, deren gleichzeitige Änderung mit "erledigt/gelöscht" als Konflikt gilt
   M.EDIT_FIELDS = ['title', 'type', 'patientId', 'recall', 'deadline', 'important'];
   // Technische Felder: bei gleichzeitiger Änderung still deterministisch entscheiden (kein Konflikt)
-  M.SILENT_FIELDS = ['typeAuto', 'doneAt', 'createdAt', 'lastPostponedAt', 'purged', 'recurrence'];
+  M.SILENT_FIELDS = ['typeAuto', 'doneAt', 'createdAt', 'lastPostponedAt', 'purged', 'recurrence', 'rank'];
+
+  // Wichtigkeit: 0 = normal, 1 = wichtig (★), 2 = sehr wichtig (★★); ältere Daten: true = 1
+  M.importance = function (v) {
+    var x = v && v.important;
+    if (x === true) return 1;
+    if (typeof x === 'number' && x > 0) return x >= 2 ? 2 : 1;
+    return 0;
+  };
+  M.IMPORTANCE_LABEL = ['normal', 'wichtig', 'sehr wichtig'];
+  // Aufwand: L = leicht, M = mittel, S = schwer
+  M.EFFORT = ['L', 'M', 'S'];
+  M.EFFORT_LABEL = { L: 'leicht', M: 'mittel', S: 'schwer' };
+  M.effort = function (v) { return v && M.EFFORT.indexOf(v.effort) >= 0 ? v.effort : null; };
+  M.rank = function (v) { return v && typeof v.rank === 'number' && isFinite(v.rank) ? v.rank : null; };
   M.STATUS = ['open', 'waiting', 'done'];
   M.FIELD_LABEL = {
     title: 'Titel', type: 'Art', patientId: 'Patient', recall: 'Wiedervorlage', deadline: 'Frist',
-    important: 'Wichtig', status: 'Status', label: 'Patientenkürzel'
+    important: 'Wichtigkeit', status: 'Status', label: 'Patientenkürzel', effort: 'Aufwand'
   };
   M.STATUS_LABEL = { open: 'Offen', waiting: 'Warte auf Rückmeldung', done: 'Erledigt' };
 
@@ -951,7 +1011,9 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
       patientId: data.patientId || null,
       recall: data.recall,
       deadline: data.deadline || null,
-      important: !!data.important,
+      important: data.important === true ? 1 : (Number(data.important) > 0 ? Math.min(2, Number(data.important)) : 0),
+      effort: M.EFFORT.indexOf(data.effort) >= 0 ? data.effort : null,
+      rank: null,
       status: 'open',
       doneAt: null,
       deleted: false,
@@ -1025,7 +1087,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     else section = 'later';
     var overdue = (dR !== null && dR < 0) || (dD !== null && dD < 0);
     var dueToday = !overdue && (dR === 0 || dD === 0);
-    var longOverdue = section === 'today' && dR !== null && dR < -7 && !v.important && tier === 3 && !conflict;
+    var longOverdue = section === 'today' && dR !== null && dR < -7 && !M.importance(v) && M.rank(v) === null && tier === 3 && !conflict;
     var deadlineColor = dD === null ? null : (dD <= 0 ? 'red' : (dD <= 3 ? 'yellow' : 'neutral'));
     return {
       dR: dR, dD: dD, tier: tier, section: section, overdue: overdue, dueToday: dueToday,
@@ -1033,12 +1095,19 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     };
   };
 
-  // Stabile Sortierung: Fristdringlichkeit → wichtig → Wiedervorlage → Frist → erstellt → ID
+  // Stabile Sortierung: eigene Reihenfolge (oben = als Nächstes) → Fristdringlichkeit → Wichtigkeit
+  // → Wiedervorlage → Frist → erstellt → ID. Aufgaben ohne eigene Position folgen automatisch sortiert.
   M.compare = function (a, b) {
+    var ka = M.rank(a.task.v), kb = M.rank(b.task.v);
+    if (ka !== null || kb !== null) {
+      if (ka === null) return 1;
+      if (kb === null) return -1;
+      if (ka !== kb) return ka - kb;
+    }
     var ca = a.cls, cb = b.cls;
     if (ca.tier !== cb.tier) return ca.tier - cb.tier;
-    var ia = a.task.v.important ? 0 : 1, ib = b.task.v.important ? 0 : 1;
-    if (ia !== ib) return ia - ib;
+    var ia = M.importance(a.task.v), ib = M.importance(b.task.v);
+    if (ia !== ib) return ib - ia;
     var ra = ca.dR === null ? Infinity : ca.dR, rb = cb.dR === null ? Infinity : cb.dR;
     if (ra !== rb) return ra < rb ? -1 : 1;
     var da = ca.dD === null ? Infinity : ca.dD, db = cb.dD === null ? Infinity : cb.dD;
@@ -1171,7 +1240,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
 
     function matches(t) {
       if (opts.fType && t.v.type !== opts.fType) return false;
-      if (opts.fImportant && !t.v.important) return false;
+      if (opts.fImportant && !M.importance(t.v)) return false;
       if (q) {
         var loc = getLocal(t.id);
         var hay = u.fold(t.v.title) + '\n' + u.fold(t.v.patientId ? (display[t.v.patientId] || '') : '') + '\n' + u.fold(loc && loc.note ? loc.note : '');
@@ -2750,6 +2819,9 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     vorbereitung: [['path', { d: 'M9.5 6.5h10M9.5 12h10M9.5 17.5h10' }], ['path', { d: 'm3.8 6.5 1.2 1.2 2.2-2.4' }], ['circle', { cx: 5.3, cy: 12, r: 1.3 }], ['circle', { cx: 5.3, cy: 17.5, r: 1.3 }]],
     sonstiges: [['circle', { cx: 6, cy: 12, r: 1.6, fill: 'currentColor' }], ['circle', { cx: 12, cy: 12, r: 1.6, fill: 'currentColor' }], ['circle', { cx: 18, cy: 12, r: 1.6, fill: 'currentColor' }]],
     check: [['path', { d: 'M5 12.5 9.5 17 19 7.5' }]],
+    grip: [['circle', { cx: 9, cy: 6, r: 1.4, fill: 'currentColor' }], ['circle', { cx: 15, cy: 6, r: 1.4, fill: 'currentColor' }],
+      ['circle', { cx: 9, cy: 12, r: 1.4, fill: 'currentColor' }], ['circle', { cx: 15, cy: 12, r: 1.4, fill: 'currentColor' }],
+      ['circle', { cx: 9, cy: 18, r: 1.4, fill: 'currentColor' }], ['circle', { cx: 15, cy: 18, r: 1.4, fill: 'currentColor' }]],
     circle: [['circle', { cx: 12, cy: 12, r: 8.5 }]],
     star: [['path', { d: 'M12 3.6 14.5 8.8l5.7.8-4.1 4 1 5.6L12 16.5l-5.1 2.7 1-5.6-4.1-4 5.7-.8z' }]],
     starFill: [['path', { d: 'M12 3.6 14.5 8.8l5.7.8-4.1 4 1 5.6L12 16.5l-5.1 2.7 1-5.6-4.1-4 5.7-.8z', fill: 'currentColor' }]],
@@ -2908,7 +2980,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
       var pid = resolvePatient(data.patient, ctx, out);
       var t = M.newTask({
         title: data.title, type: data.type, typeAuto: data.typeAuto, patientId: pid,
-        recall: data.recall, deadline: data.deadline, important: data.important
+        recall: data.recall, deadline: data.deadline, important: data.important, effort: data.effort
       }, ctx);
       out.tasks.push(t);
       if (data.note) out.local.push({ id: t.id, note: data.note, nextStep: null, lu: ctx.t });
@@ -2926,8 +2998,9 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
       var out = { tasks: [], patients: [], prev: t };
       var ch = Object.assign({}, changes);
       if ('patient' in ch) { ch.patientId = resolvePatient(ch.patient, ctx, out); delete ch.patient; }
-      if (ch.status === 'done' && t.v.status !== 'done') ch.doneAt = ctx.t;
+      if (ch.status === 'done' && t.v.status !== 'done') { ch.doneAt = ctx.t; ch.rank = null; }
       if (ch.status && ch.status !== 'done') ch.doneAt = null;
+      if ('recall' in ch && ch.recall !== t.v.recall && !('rank' in changes)) ch.rank = null; // neuer Termin → eigene Position aufheben
       var r = M.write(t, ch, ctx);
       if (opts.countPostpone) {
         r = M.write(r, { lastPostponedAt: ctx.t }, ctx);
@@ -2945,7 +3018,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
       var t = cur.tasks[id];
       if (!t) throw new Error('missing');
       var nr = D.postpone(t.v.recall, D.today(), unit);
-      var r = M.write(t, { recall: nr, lastPostponedAt: ctx.t }, ctx);
+      var r = M.write(t, { recall: nr, lastPostponedAt: ctx.t, rank: null }, ctx);
       r = M.bumpPostpone(r, ctx, 1);
       return { tasks: [r], prev: t, newRecall: nr };
     });
@@ -2967,6 +3040,29 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
       var prevOwn = prev.pp && prev.pp[own] ? prev.pp[own][0] : 0;
       if (curOwn !== prevOwn) r = M.bumpPostpone(r, ctx, prevOwn - curOwn);
       return { tasks: [r] };
+    });
+  };
+
+  // Eigene Reihenfolge: ids = Reihenfolge im Bereich nach dem Verschieben, moved = verschobene Aufgabe.
+  // Alle Aufgaben von oben bis zur verschobenen (bzw. bis zur letzten bereits platzierten) erhalten
+  // eine Position; darunter bleibt die automatische Sortierung.
+  A.setOrder = function (ids, moved) {
+    var k = ids.indexOf(moved);
+    var last = k;
+    ids.forEach(function (id, i) { var t = S.tasks.get(id); if (t && M.rank(t.v) !== null) last = Math.max(last, i); });
+    var target = {};
+    for (var i = 0; i <= last; i++) target[ids[i]] = (i + 1) * 10;
+    var changeIds = Object.keys(target).filter(function (id) { var t = S.tasks.get(id); return t && M.rank(t.v) !== target[id]; });
+    if (!changeIds.length) return Promise.resolve({ tasks: [] });
+    return commit({ tasks: changeIds }, function (cur, ctx) {
+      return { tasks: changeIds.filter(function (id) { return cur.tasks[id]; }).map(function (id) { return M.write(cur.tasks[id], { rank: target[id] }, ctx); }) };
+    });
+  };
+  A.clearRanks = function (ids) {
+    ids = ids.filter(function (id) { var t = S.tasks.get(id); return t && M.rank(t.v) !== null; });
+    if (!ids.length) return Promise.resolve({ tasks: [] });
+    return commit({ tasks: ids }, function (cur, ctx) {
+      return { tasks: ids.filter(function (id) { return cur.tasks[id]; }).map(function (id) { return M.write(cur.tasks[id], { rank: null }, ctx); }) };
     });
   };
 
@@ -3065,6 +3161,8 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
   };
 
   function render() {
+    if (S.dragging) { S.renderPending = true; return; }
+    S.renderPending = false;
     S.today = D.today();
     var view = M.buildView(Array.from(S.tasks.values()), Array.from(S.patients.values()), S.local, {
       today: S.today, search: S.ui.search, fType: S.ui.fType, fImportant: S.ui.fImportant, fStatus: S.ui.fStatus
@@ -3138,6 +3236,11 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
       if (comp.conflict) parts.push(comp.conflict + ' Konflikt');
       head.appendChild(h('span', { class: 'sec-comp' }, parts.join(' · ')));
     }
+    var ranked = items.filter(function (it) { return M.rank(it.task.v) !== null; }).map(function (it) { return it.task.id; });
+    if (ranked.length) {
+      head.appendChild(h('button', { type: 'button', class: 'btn link small reset-order', title: 'Eigene Reihenfolge in diesem Bereich aufheben',
+        onclick: function () { A.clearRanks(ranked).then(render); } }, 'Automatisch sortieren'));
+    }
     sec.appendChild(head);
     if (!count) {
       sec.appendChild(h('p', { class: 'empty' }, filtersActive() ? 'Keine Treffer.' : EMPTY[key]));
@@ -3168,20 +3271,25 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
   function row(it) {
     var t = it.task, v = t.v, cls = it.cls;
     var today = S.today;
+    var imp = M.importance(v), eff = M.effort(v), rk = M.rank(v);
     var classes = 'task';
-    if (v.important) classes += ' is-important';
+    if (imp) classes += ' is-important' + (imp === 2 ? ' is-very-important' : '');
+    if (rk !== null) classes += ' is-ranked';
     if (S.ui.highlightId === t.id) classes += ' is-new';
     if (cls.conflict) classes += ' has-conflict';
     if (cls.deadlineColor === 'red') classes += ' dl-urgent';
     var label = v.title + (it.patient ? ', ' + it.patient : '') + ', ' + D.relRecall(v.recall, today) + (v.deadline ? ', ' + D.relDeadline(v.deadline, today) : '');
     var el = h('div', { class: classes, role: 'listitem', tabindex: '0', 'data-id': t.id, 'aria-label': label });
 
+    var grip = h('span', { class: 'drag', title: 'Ziehen zum Umsortieren (oben = als Nächstes) · Tastatur: Alt + ↑/↓', 'aria-hidden': 'true' }, [icon('grip')]);
     var doneBtn = h('button', { type: 'button', class: 'done-btn', 'data-act': 'done', 'aria-label': 'Als erledigt markieren', title: 'Erledigt (E)' }, [icon('check')]);
     var main = h('div', { class: 'task-main' });
     var line = h('div', { class: 'task-line' });
     if (it.patient) line.appendChild(h('span', { class: 'pat', title: 'Patient' }, it.patient));
     line.appendChild(h('span', { class: 'title' }, v.title));
-    if (v.important) line.appendChild(h('span', { class: 'imp', title: 'Wichtig' }, [icon('starFill'), h('span', { class: 'sr-only' }, 'Wichtig')]));
+    if (imp) line.appendChild(h('span', { class: 'imp imp-' + imp, title: imp === 2 ? 'Sehr wichtig' : 'Wichtig' },
+      [icon('starFill')].concat(imp === 2 ? [icon('starFill')] : []).concat([h('span', { class: 'sr-only' }, imp === 2 ? 'Sehr wichtig' : 'Wichtig')])));
+    if (eff) line.appendChild(h('span', { class: 'eff eff-' + eff, title: 'Aufwand: ' + M.EFFORT_LABEL[eff] }, [eff, h('span', { class: 'sr-only' }, ' Aufwand ' + M.EFFORT_LABEL[eff])]));
     main.appendChild(line);
 
     if (cls.conflict) line.appendChild(h('span', { class: 'badge b-conflict' }, [icon('conflict'), 'Konflikt prüfen']));
@@ -3190,10 +3298,13 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     if (it.local && it.local.note) line.appendChild(h('span', { class: 'badge b-note', title: it.local.note }, 'Notiz'));
 
     var meta = h('div', { class: 'task-meta' });
+    meta.appendChild(h('span', { class: 'created', title: 'Erstellt ' + D.fmtDateTime(v.createdAt) }, 'erstellt ' + D.fmtDay(v.createdAt, today)));
     var rc = 'recall' + (cls.dR === null ? ' nodate' : (cls.dR < 0 ? ' overdue' : (cls.dR === 0 ? ' due' : '')));
     meta.appendChild(h('span', { class: rc, title: v.recall ? 'Wiedervorlage ' + D.fmt(v.recall) : 'Wiedervorlage: Datum unbekannt' }, [icon('calendar'), D.relRecall(v.recall, today)]));
     if (v.deadline) {
-      meta.appendChild(h('span', { class: 'dl-slot' }, [h('span', { class: 'dl dl-' + cls.deadlineColor, title: 'Frist ' + D.fmt(v.deadline) }, [icon('flag'), D.relDeadline(v.deadline, today)])]));
+      var dlc = cls.dD < 0 ? 'dl-over' : (cls.dD === 0 ? 'dl-today' : (cls.dD <= 3 ? 'dl-soon' : 'dl-neutral'));
+      meta.appendChild(h('span', { class: 'dl-slot' }, [h('span', { class: 'dl ' + dlc, title: 'Frist bis ' + D.fmt(v.deadline), role: cls.dD <= 0 ? 'status' : null },
+        [icon(cls.dD <= 3 ? 'alert' : 'flag'), D.relDeadline(v.deadline, today)])]));
     } else {
       meta.appendChild(h('span', { class: 'dl-slot', 'aria-hidden': 'true' }));
     }
@@ -3207,7 +3318,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
       actBtn('pp-w', '+1 Woche', '+1 W', 'Um 1 Woche verschieben (W)', 'Um 1 Woche verschieben'),
       actBtn('pp-m', '+1 Monat', '+1 M', 'Um 1 Monat verschieben (M)', 'Um 1 Monat verschieben')
     ]);
-    add(el, [doneBtn, typeIcon(v.type), main, meta, acts]);
+    add(el, [grip, doneBtn, typeIcon(v.type), main, meta, acts]);
     return el;
   }
 
@@ -3272,6 +3383,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
 
   // ---------- Listen-Ereignisse ----------
   function onListClick(e) {
+    if (e.target.closest('.drag') || S.justDragged) return;
     var actEl = e.target.closest('[data-act]');
     var rowEl = e.target.closest('.task');
     if (!rowEl) return;
@@ -3328,6 +3440,74 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
   }
 
   function short(s) { s = String(s || ''); return s.length > 48 ? s.slice(0, 47) + '…' : s; }
+
+  // ---------- Eigene Reihenfolge: Ziehen (Maus/Touch) und Alt + Pfeil ----------
+  function rowIds(container) {
+    return Array.prototype.filter.call(container.children, function (r) { return r.classList.contains('task'); })
+      .map(function (r) { return r.getAttribute('data-id'); });
+  }
+
+  function moveRow(rowEl, delta) {
+    var container = rowEl.parentElement;
+    var ids = rowIds(container);
+    var id = rowEl.getAttribute('data-id');
+    var i = ids.indexOf(id), j = i + delta;
+    if (j < 0 || j >= ids.length) return;
+    ids.splice(i, 1); ids.splice(j, 0, id);
+    A.setOrder(ids, id).then(function () {
+      render();
+      var r = $('list').querySelector('.task[data-id="' + cssEsc(id) + '"]');
+      if (r) r.focus();
+    });
+  }
+
+  function initDrag() {
+    var list = $('list');
+    var drag = null;
+    function rowsOf(c) { return Array.prototype.filter.call(c.children, function (r) { return r.classList.contains('task'); }); }
+    list.addEventListener('pointerdown', function (e) {
+      var handle = e.target.closest('.drag');
+      if (!handle || (e.pointerType === 'mouse' && e.button !== 0)) return;
+      var row = handle.closest('.task');
+      if (!row || row.getAttribute('data-done')) return;
+      e.preventDefault();
+      try { handle.setPointerCapture(e.pointerId); } catch (err) { /* ältere Browser */ }
+      drag = { row: row, container: row.parentElement, handle: handle, y: e.clientY, moved: false, before: rowIds(row.parentElement).join(',') };
+      S.dragging = true;
+    });
+    list.addEventListener('pointermove', function (e) {
+      if (!drag) return;
+      if (!drag.moved && Math.abs(e.clientY - drag.y) < 5) return;
+      if (!drag.moved) { drag.moved = true; drag.row.classList.add('dragging'); doc.body.classList.add('is-dragging'); }
+      e.preventDefault();
+      var others = rowsOf(drag.container).filter(function (r) { return r !== drag.row; });
+      var before = null;
+      for (var i = 0; i < others.length; i++) {
+        var rect = others[i].getBoundingClientRect();
+        if (e.clientY < rect.top + rect.height / 2) { before = others[i]; break; }
+      }
+      if (before !== drag.row.nextSibling) drag.container.insertBefore(drag.row, before);
+      // am Rand automatisch scrollen
+      if (e.clientY < 70) root.scrollBy(0, -12);
+      else if (e.clientY > root.innerHeight - 70) root.scrollBy(0, 12);
+    });
+    function end(e) {
+      if (!drag) return;
+      var d = drag; drag = null;
+      try { d.handle.releasePointerCapture(e.pointerId); } catch (err) { /* ignorieren */ }
+      d.row.classList.remove('dragging'); doc.body.classList.remove('is-dragging');
+      S.dragging = false;
+      var ids = rowIds(d.container);
+      if (d.moved && ids.join(',') !== d.before) {
+        S.justDragged = true; setTimeout(function () { S.justDragged = false; }, 50);
+        A.setOrder(ids, d.row.getAttribute('data-id')).then(function () { render(); toast('Reihenfolge gespeichert.', { timeout: 1800 }); }, render);
+      } else if (S.renderPending) {
+        render();
+      }
+    }
+    list.addEventListener('pointerup', end);
+    list.addEventListener('pointercancel', end);
+  }
 
   // ---------- Patientenauswahl ----------
   function PatientPicker(input, list, hintEl, opts) {
@@ -3434,8 +3614,9 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
   }
 
   // ---------- Schnelleingabe ----------
-  var Q = { type: null, recallPick: '1w', important: false, picker: null, saving: false };
-  var RECALL_PICKS = [['1d', 'Morgen'], ['eow', 'Ende der Woche'], ['1w', '1 Woche'], ['2w', '2 Wochen'], ['3w', '3 Wochen'], ['4w', '4 Wochen'], ['none', 'unbekannt']];
+  var Q = { type: null, recallPick: '1w', importance: 0, effort: null, picker: null, saving: false };
+  var RECALL_PICKS = [['today', 'Heute (später)'], ['1d', 'Morgen'], ['2d', '+2 Tage'], ['3d', '+3 Tage'], ['eow', 'Ende der Woche'],
+    ['1w', '1 Woche'], ['2w', '2 Wochen'], ['3w', '3 Wochen'], ['4w', '4 Wochen'], ['none', 'unbekannt']];
   var RECALL_KEYS = RECALL_PICKS.map(function (p) { return p[0]; });
 
   function buildTypeChips(box, onPick) {
@@ -3475,13 +3656,52 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
   function buildSeg(box, options, onPick, cls) {
     clear(box);
     options.forEach(function (o) {
-      var b = h('button', { type: 'button', class: 'seg-btn' + (cls ? ' ' + cls : ''), role: 'radio', 'aria-checked': 'false', 'data-val': o[0] }, o[1]);
+      var b = h('button', { type: 'button', class: 'seg-btn' + (cls ? ' ' + cls : ''), role: 'radio', 'aria-checked': 'false', 'data-val': o[0], title: o[2] || null, 'aria-label': o[2] || null }, o[1]);
       b.addEventListener('click', function () { onPick(o[0]); });
       box.appendChild(b);
     });
+    // Ein Tab-Stopp je Gruppe; Pfeiltasten wechseln zwischen den Knöpfen
+    if (!box._roving) {
+      box._roving = true;
+      box.addEventListener('keydown', function (e) {
+        var keys = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+        if (!(e.key in keys) || e.altKey) return;
+        var btns = Array.prototype.slice.call(box.querySelectorAll('.seg-btn'));
+        var i = btns.indexOf(doc.activeElement);
+        if (i < 0) return;
+        e.preventDefault();
+        var n = (i + keys[e.key] + btns.length) % btns.length;
+        btns.forEach(function (b, k) { b.tabIndex = k === n ? 0 : -1; });
+        btns[n].focus();
+      });
+    }
   }
   function paintSeg(box, val) {
+    var any = null;
     Array.prototype.forEach.call(box.querySelectorAll('.seg-btn'), function (b) {
+      var on = b.getAttribute('data-val') === val;
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+      b.classList.toggle('on', on);
+      if (on) any = b;
+    });
+    var btns = box.querySelectorAll('.seg-btn');
+    Array.prototype.forEach.call(btns, function (b) { b.tabIndex = (any ? b === any : b === btns[0]) ? 0 : -1; });
+  }
+
+  var IMPORTANCE_OPTS = [['0', 'normal', 'Wichtigkeit: normal'], ['1', '★', 'Wichtig (1 Stern)'], ['2', '★★', 'Sehr wichtig (2 Sterne)']];
+
+  // Aufwand L/M/S: Kästchen zum Ankreuzen, höchstens eines, erneutes Klicken entfernt
+  function buildEffort(box, onPick) {
+    clear(box);
+    M.EFFORT.forEach(function (e) {
+      var b = h('button', { type: 'button', class: 'eff-box', role: 'checkbox', 'aria-checked': 'false', 'data-val': e, title: M.EFFORT_LABEL[e], 'aria-label': 'Aufwand ' + M.EFFORT_LABEL[e] },
+        [h('span', { class: 'box', 'aria-hidden': 'true' }), h('span', null, e)]);
+      b.addEventListener('click', function () { onPick(e); });
+      box.appendChild(b);
+    });
+  }
+  function paintEffort(box, val) {
+    Array.prototype.forEach.call(box.querySelectorAll('.eff-box'), function (b) {
       var on = b.getAttribute('data-val') === val;
       b.setAttribute('aria-checked', on ? 'true' : 'false');
       b.classList.toggle('on', on);
@@ -3511,14 +3731,15 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     paintSeg($('qRecallPicks'), Q.recallPick);
     if (Q.recallPick === 'none') $('qRecallDate').value = '';
     else if (Q.recallPick !== 'date') $('qRecallDate').value = D.pick(D.today(), Q.recallPick);
-    paintToggle($('qImportant'), Q.important, 'Wichtig');
+    paintSeg($('qImportance'), String(Q.importance));
+    paintEffort($('qEffort'), Q.effort);
   }
 
   function saveDraft() {
     try {
       root.localStorage.setItem(DRAFT_KEY, JSON.stringify({
         title: $('qTitle').value, patient: $('qPatient').value, type: Q.type, recallPick: Q.recallPick,
-        recallDate: $('qRecallDate').value, deadline: $('qDeadline').value, important: Q.important
+        recallDate: $('qRecallDate').value, deadline: $('qDeadline').value, importance: Q.importance, effort: Q.effort
       }));
     } catch (e) { /* Entwurf nicht speicherbar */ }
   }
@@ -3533,13 +3754,14 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     Q.recallPick = (RECALL_KEYS.indexOf(d.recallPick) >= 0 || d.recallPick === 'date') ? d.recallPick : '1w';
     if (Q.recallPick === 'date' && D.isValid(d.recallDate)) $('qRecallDate').value = d.recallDate;
     $('qDeadline').value = D.isValid(d.deadline) ? d.deadline : '';
-    Q.important = !!d.important;
+    Q.importance = d.importance === 1 || d.importance === 2 ? d.importance : (d.important ? 1 : 0);
+    Q.effort = M.EFFORT.indexOf(d.effort) >= 0 ? d.effort : null;
   }
 
   function resetQuick() {
     $('qTitle').value = '';
     Q.picker.reset();
-    Q.type = null; Q.recallPick = '1w'; Q.important = false;
+    Q.type = null; Q.recallPick = '1w'; Q.importance = 0; Q.effort = null;
     $('qDeadline').value = '';
     paintQuick();
     clearDraft();
@@ -3566,7 +3788,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     try {
       var out = await A.create({
         title: title, type: type, typeAuto: !Q.type, patient: patient, recall: recall,
-        deadline: deadlineVal || null, important: Q.important
+        deadline: deadlineVal || null, important: Q.importance, effort: Q.effort
       });
       var id = out.created.id;
       S.ui.highlightId = id;
@@ -3603,7 +3825,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     var quickBox = doc.querySelector('.quick');
     function quickActive() {
       var inside = quickBox.contains(doc.activeElement);
-      var hasContent = $('qTitle').value.trim() || $('qPatient').value.trim() || $('qDeadline').value || Q.important || Q.type || Q.recallPick !== '1w';
+      var hasContent = $('qTitle').value.trim() || $('qPatient').value.trim() || $('qDeadline').value || Q.importance || Q.effort || Q.type || Q.recallPick !== '1w';
       quickBox.classList.toggle('active', !!(inside || hasContent));
     }
     quickBox.addEventListener('focusin', quickActive);
@@ -3619,7 +3841,8 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     });
     $('qDeadline').addEventListener('change', saveDraft);
     $('qDeadlineClear').addEventListener('click', function () { $('qDeadline').value = ''; saveDraft(); $('qDeadline').focus(); });
-    $('qImportant').addEventListener('click', function () { Q.important = !Q.important; paintQuick(); saveDraft(); });
+    buildSeg($('qImportance'), IMPORTANCE_OPTS, function (v) { Q.importance = Number(v); paintQuick(); saveDraft(); });
+    buildEffort($('qEffort'), function (e) { Q.effort = Q.effort === e ? null : e; paintQuick(); saveDraft(); });
     // Enter in Datumsfeldern speichert ebenfalls
     ['qRecallDate', 'qDeadline'].forEach(function (id) {
       $(id).addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); saveQuick(); } });
@@ -3666,7 +3889,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
   // ---------- Bearbeiten ----------
   // dirty: Felder, die in diesem Fenster geändert wurden – nur diese werden gespeichert. So überschreibt
   // ein offenes Bearbeitungsfenster keine zwischenzeitlich synchronisierten Änderungen anderer Felder.
-  var E = { id: null, origRecall: null, postponeCounted: false, type: null, typeAuto: false, important: false, status: 'open', picker: null, saveTimer: null, saving: Promise.resolve(), dirty: {} };
+  var E = { id: null, origRecall: null, postponeCounted: false, type: null, typeAuto: false, important: 0, effort: null, status: 'open', picker: null, saveTimer: null, saving: Promise.resolve(), dirty: {} };
   function markDirty(f) { E.dirty[f] = true; }
   var STATUS_OPTS = [['open', 'Offen'], ['done', 'Erledigt']];
 
@@ -3681,7 +3904,8 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     if (val == null || val === '') return '(leer)';
     if (field === 'patientId') return (S.view && S.view.display[val]) || '(unbekannt)';
     if (field === 'type') return M.typeLabel(val);
-    if (field === 'important') return val ? 'Ja' : 'Nein';
+    if (field === 'important') return M.IMPORTANCE_LABEL[M.importance({ important: val })];
+    if (field === 'effort') return val ? M.EFFORT_LABEL[val] || String(val) : '(leer)';
     if (field === 'recall' || field === 'deadline') return D.isValid(val) ? D.fmt(val) : String(val);
     if (field === 'status') return M.STATUS_LABEL[val] || String(val);
     return String(val);
@@ -3726,7 +3950,8 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     if (!d.type) { E.type = t.v.type; E.typeAuto = !!t.v.typeAuto; paintTypeChips($('eTypes'), E.type, false); }
     if (!d.recall) $('eRecall').value = t.v.recall || '';
     if (!d.deadline) $('eDeadline').value = t.v.deadline || '';
-    if (!d.important) { E.important = !!t.v.important; paintToggle($('eImportant'), E.important, 'Wichtig'); }
+    if (!d.important) { E.important = M.importance(t.v); paintSeg($('eImportance'), String(E.important)); }
+    if (!d.effort) { E.effort = M.effort(t.v); paintEffort($('eEffort'), E.effort); }
     if (!d.status) { E.status = t.v.status === 'done' ? 'done' : 'open'; paintSeg($('eStatus'), E.status); }
     var loc = S.local.get(t.id);
     if (!d.note) $('eNote').value = loc && loc.note ? loc.note : '';
@@ -3734,7 +3959,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     $('eNoteHidden').hidden = !$('eNoteField').hidden;
     renderEditConflicts(t);
     var pc = M.postponeCount(t);
-    $('eMeta').textContent = 'Erstellt ' + D.fmtDateTime(t.v.createdAt) + ' · Geändert ' + D.fmtDateTime(t.u) +
+    $('eMeta').textContent = 'Erstellt am ' + D.fmtDateTime(t.v.createdAt) + ' · Geändert ' + D.fmtDateTime(t.u) +
       (pc ? ' · ' + pc + '× verschoben' : '') + (t.v.typeAuto ? ' · Art automatisch erkannt' : '');
   }
 
@@ -3773,7 +3998,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     if (!t) return;
     var ch = {};
     var dirty = E.dirty;
-    var snap = { title: $('eTitle').value, patient: $('ePatient').value, recall: $('eRecall').value, deadline: $('eDeadline').value, note: $('eNote').value, type: E.type, important: E.important, status: E.status };
+    var snap = { title: $('eTitle').value, patient: $('ePatient').value, recall: $('eRecall').value, deadline: $('eDeadline').value, note: $('eNote').value, type: E.type, important: E.important, effort: E.effort, status: E.status };
     var title = $('eTitle').value.trim();
     if (dirty.title) {
       if (!title) { setSaveState('Titel darf nicht leer sein – nicht gespeichert.', 'error'); return; }
@@ -3800,7 +4025,8 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
       if (dv && !saneDate(dv)) { setSaveState('Frist: bitte ein gültiges Datum eingeben.', 'error'); return; }
       ch.deadline = dv || null;
     }
-    if (dirty.important && E.important !== !!t.v.important) ch.important = E.important;
+    if (dirty.important && E.important !== M.importance(t.v)) ch.important = E.important;
+    if (dirty.effort && E.effort !== M.effort(t.v)) ch.effort = E.effort;
     var curStatus = t.v.status === 'done' ? 'done' : 'open';
     if (dirty.status && E.status !== curStatus) ch.status = E.status;
     var loc = S.local.get(id);
@@ -3816,7 +4042,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
       if (noteChanged) await A.setLocal(id, { note: note || null });
       // gespeicherte Felder sind nicht mehr "in Bearbeitung" (sofern seither nicht weiter getippt)
       if (E.id === id) {
-        var cur = { title: $('eTitle').value, patient: $('ePatient').value, recall: $('eRecall').value, deadline: $('eDeadline').value, note: $('eNote').value, type: E.type, important: E.important, status: E.status };
+        var cur = { title: $('eTitle').value, patient: $('ePatient').value, recall: $('eRecall').value, deadline: $('eDeadline').value, note: $('eNote').value, type: E.type, important: E.important, effort: E.effort, status: E.status };
         Object.keys(dirty).forEach(function (k) { if (cur[k] === snap[k]) delete E.dirty[k]; });
       }
       setSaveState('Gespeichert', 'ok');
@@ -3852,7 +4078,8 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
       scheduleEditSave(0);
     }, 'small');
     buildSeg($('eStatus'), STATUS_OPTS, function (v) { E.status = v; markDirty('status'); paintSeg($('eStatus'), v); scheduleEditSave(0); });
-    $('eImportant').addEventListener('click', function () { E.important = !E.important; markDirty('important'); paintToggle($('eImportant'), E.important, 'Wichtig'); scheduleEditSave(0); });
+    buildSeg($('eImportance'), IMPORTANCE_OPTS, function (v) { E.important = Number(v); markDirty('important'); paintSeg($('eImportance'), v); scheduleEditSave(0); });
+    buildEffort($('eEffort'), function (e) { E.effort = E.effort === e ? null : e; markDirty('effort'); paintEffort($('eEffort'), E.effort); scheduleEditSave(0); });
     $('eTitle').addEventListener('input', function () { markDirty('title'); scheduleEditSave(); });
     $('eTitle').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); flushEdit().then(closeEdit); } });
     $('eRecall').addEventListener('change', function () { markDirty('recall'); scheduleEditSave(600); });
@@ -3997,6 +4224,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
         kv('↑ ↓', 'In der Liste bewegen'),
         kv('E', 'Erledigt'),
         kv('T · W · M', '+1 Tag · +1 Woche · +1 Monat'),
+        kv('Alt + ↑ ↓', 'Aufgabe nach oben/unten schieben (oben = als Nächstes)'),
         kv('Entf', 'Löschen (mit Rückgängig)'),
         kv('Esc', 'Bearbeitung schließen · Suche leeren')
       ]),
@@ -4494,6 +4722,11 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
   function onKey(e) {
     if (e.defaultPrevented || e.isComposing) return;
     if (doc.querySelector('dialog[open]')) return;
+    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      var r0 = e.target && e.target.closest ? e.target.closest('.task') : null;
+      if (r0 && e.target === r0 && !r0.getAttribute('data-done')) { e.preventDefault(); moveRow(r0, e.key === 'ArrowUp' ? -1 : 1); }
+      return;
+    }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     var t = e.target;
     var editable = t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
@@ -4541,6 +4774,7 @@ ul.plain { margin: 0 0 8px; padding-left: 18px; }
     initFilters();
     initEdit();
     $('list').addEventListener('click', onListClick);
+    initDrag();
     doc.addEventListener('keydown', onKey);
     Ctl.onStatus = function () {
       renderBackupPill();

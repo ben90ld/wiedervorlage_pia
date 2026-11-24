@@ -8,13 +8,13 @@ const OUT = path.join(H.ROOT, 'docs', 'screenshots');
 fs.mkdirSync(OUT, { recursive: true });
 
 const DATA = [
-  { title: 'Arztbrief fertigstellen', patient: 'Musterfrau, E.', recall: '2026-11-06', deadline: '2026-11-10', note: 'Vorbefunde liegen im Postfach' },
-  { title: 'Labor kontrollieren', patient: 'Beispiel, K.', recall: '2026-11-10' },
+  { title: 'Arztbrief fertigstellen', patient: 'Musterfrau, E.', recall: '2026-11-06', deadline: '2026-11-10', note: 'Vorbefunde liegen im Postfach', important: 2, effort: 'S' },
+  { title: 'Labor kontrollieren', patient: 'Beispiel, K.', recall: '2026-11-10', effort: 'L' },
   { title: 'Rückruf durchführen', patient: 'Müller, M.', recall: '2026-11-09' },
   { title: 'RS mit OA wegen Antrag', recall: '2026-11-10' },
   { title: 'Bescheinigung erstellen', patient: 'Mustermann, J.', recall: '2026-11-20', deadline: '2026-11-12' },
   { title: 'Fall im PIA-Team vorstellen', recall: '2026-11-12' },
-  { title: 'Rezept vorbereiten', patient: 'Sommer, T.', recall: '2026-11-13', important: true },
+  { title: 'Rezept vorbereiten', patient: 'Sommer, T.', recall: '2026-11-13', important: 1, effort: 'M' },
   { title: 'Mail an Betreuerin beantworten', recall: '2026-11-11' },
   { title: 'PIA-Intervision Fall vorbereiten', recall: '2026-11-16' },
   { title: 'Doku Gruppentermin nachtragen', recall: '2026-11-11' },
@@ -31,6 +31,11 @@ async function fill(page) {
     await WV.actions.create({ title: 'Befund Kardiologie anfordern', type: 'befund', typeAuto: true, patient: { newLabel: 'Müller, M.' }, recall: '2026-12-01', deadline: null, important: false });
     const done = await WV.actions.create({ title: 'Attest schreiben', type: 'bescheinigung', typeAuto: true, patient: null, recall: '2026-11-05' });
     await WV.actions.update(done.created.id, { status: 'done' });
+    // eigene Reihenfolge: "Labor kontrollieren" als Nächstes
+    WV.ui.render();
+    const ids = Array.from(document.querySelectorAll('.sec-today .rows .task')).map((r) => r.getAttribute('data-id'));
+    const lab = Array.from(WV.state.tasks.values()).find((t) => t.v.title === 'Labor kontrollieren').id;
+    await WV.actions.setOrder([lab].concat(ids.filter((x) => x !== lab)), lab);
     WV.ui.render();
   });
 }

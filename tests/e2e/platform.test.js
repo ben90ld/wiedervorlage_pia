@@ -66,6 +66,28 @@ test('iPhone-13-Darstellung (simuliert, kein echtes Safari): bedienbar, kein waa
   await ctx.close();
 });
 
+test('iPhone (simuliert): Umsortieren per Touch-Ziehen am Griff', async () => {
+  const ctx = await browser.newContext(Object.assign({}, devices['iPhone 13'], { locale: 'de-DE', timezoneId: 'Europe/Berlin' }));
+  const page = await ctx.newPage();
+  await page.clock.setFixedTime(new Date(H.NOW));
+  await page.goto(base); await page.waitForSelector('html[data-ready="1"]');
+  await H.seed(page, [{ title: 'Erste', recall: '2026-11-10' }, { title: 'Zweite', recall: '2026-11-10' }, { title: 'Dritte', recall: '2026-11-10' }]);
+  const cdp = await ctx.newCDPSession(page);
+  const hb = await page.locator('.task[aria-label^="Dritte"] .drag').boundingBox();
+  const tb = await page.locator('.task[aria-label^="Erste"]').boundingBox();
+  const x = hb.x + hb.width / 2, y0 = hb.y + hb.height / 2;
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y: y0 }] });
+  for (let i = 1; i <= 10; i++) {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y0 + (tb.y + 4 - y0) * i / 10 }] });
+  }
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await page.waitForFunction(() => { const t = Array.from(WV.state.tasks.values()).find((x) => x.v.title === 'Dritte'); return t.v.rank === 10; }, null, { timeout: 10000 });
+  const order = await page.evaluate(() => Array.from(document.querySelectorAll('.sec-today .rows .task .title')).map((e) => e.textContent));
+  assert.deepEqual(order, ['Dritte', 'Erste', 'Zweite']);
+  assert.equal(await page.evaluate(() => document.getElementById('dlgEdit').open), false);
+  await ctx.close();
+});
+
 test('Leistung mit 1.000 Aufgaben (davon 600 erledigt)', async () => {
   const { ctx, page } = await H.newPage(browser, base);
   const seedMs = await page.evaluate(async () => {

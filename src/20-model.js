@@ -74,16 +74,30 @@
 
   // ---------- Felder ----------
   M.TASK_FIELDS = ['title', 'type', 'typeAuto', 'patientId', 'recall', 'deadline', 'important',
-    'status', 'doneAt', 'deleted', 'purged', 'createdAt', 'lastPostponedAt', 'recurrence'];
+    'status', 'doneAt', 'deleted', 'purged', 'createdAt', 'lastPostponedAt', 'recurrence', 'rank', 'effort'];
   M.PATIENT_FIELDS = ['label', 'createdAt', 'deleted'];
   // Felder, deren gleichzeitige Änderung mit "erledigt/gelöscht" als Konflikt gilt
   M.EDIT_FIELDS = ['title', 'type', 'patientId', 'recall', 'deadline', 'important'];
   // Technische Felder: bei gleichzeitiger Änderung still deterministisch entscheiden (kein Konflikt)
-  M.SILENT_FIELDS = ['typeAuto', 'doneAt', 'createdAt', 'lastPostponedAt', 'purged', 'recurrence'];
+  M.SILENT_FIELDS = ['typeAuto', 'doneAt', 'createdAt', 'lastPostponedAt', 'purged', 'recurrence', 'rank'];
+
+  // Wichtigkeit: 0 = normal, 1 = wichtig (★), 2 = sehr wichtig (★★); ältere Daten: true = 1
+  M.importance = function (v) {
+    var x = v && v.important;
+    if (x === true) return 1;
+    if (typeof x === 'number' && x > 0) return x >= 2 ? 2 : 1;
+    return 0;
+  };
+  M.IMPORTANCE_LABEL = ['normal', 'wichtig', 'sehr wichtig'];
+  // Aufwand: L = leicht, M = mittel, S = schwer
+  M.EFFORT = ['L', 'M', 'S'];
+  M.EFFORT_LABEL = { L: 'leicht', M: 'mittel', S: 'schwer' };
+  M.effort = function (v) { return v && M.EFFORT.indexOf(v.effort) >= 0 ? v.effort : null; };
+  M.rank = function (v) { return v && typeof v.rank === 'number' && isFinite(v.rank) ? v.rank : null; };
   M.STATUS = ['open', 'waiting', 'done'];
   M.FIELD_LABEL = {
     title: 'Titel', type: 'Art', patientId: 'Patient', recall: 'Wiedervorlage', deadline: 'Frist',
-    important: 'Wichtig', status: 'Status', label: 'Patientenkürzel'
+    important: 'Wichtigkeit', status: 'Status', label: 'Patientenkürzel', effort: 'Aufwand'
   };
   M.STATUS_LABEL = { open: 'Offen', waiting: 'Warte auf Rückmeldung', done: 'Erledigt' };
 
@@ -119,7 +133,9 @@
       patientId: data.patientId || null,
       recall: data.recall,
       deadline: data.deadline || null,
-      important: !!data.important,
+      important: data.important === true ? 1 : (Number(data.important) > 0 ? Math.min(2, Number(data.important)) : 0),
+      effort: M.EFFORT.indexOf(data.effort) >= 0 ? data.effort : null,
+      rank: null,
       status: 'open',
       doneAt: null,
       deleted: false,
@@ -193,7 +209,7 @@
     else section = 'later';
     var overdue = (dR !== null && dR < 0) || (dD !== null && dD < 0);
     var dueToday = !overdue && (dR === 0 || dD === 0);
-    var longOverdue = section === 'today' && dR !== null && dR < -7 && !v.important && tier === 3 && !conflict;
+    var longOverdue = section === 'today' && dR !== null && dR < -7 && !M.importance(v) && M.rank(v) === null && tier === 3 && !conflict;
     var deadlineColor = dD === null ? null : (dD <= 0 ? 'red' : (dD <= 3 ? 'yellow' : 'neutral'));
     return {
       dR: dR, dD: dD, tier: tier, section: section, overdue: overdue, dueToday: dueToday,
@@ -201,12 +217,19 @@
     };
   };
 
-  // Stabile Sortierung: Fristdringlichkeit → wichtig → Wiedervorlage → Frist → erstellt → ID
+  // Stabile Sortierung: eigene Reihenfolge (oben = als Nächstes) → Fristdringlichkeit → Wichtigkeit
+  // → Wiedervorlage → Frist → erstellt → ID. Aufgaben ohne eigene Position folgen automatisch sortiert.
   M.compare = function (a, b) {
+    var ka = M.rank(a.task.v), kb = M.rank(b.task.v);
+    if (ka !== null || kb !== null) {
+      if (ka === null) return 1;
+      if (kb === null) return -1;
+      if (ka !== kb) return ka - kb;
+    }
     var ca = a.cls, cb = b.cls;
     if (ca.tier !== cb.tier) return ca.tier - cb.tier;
-    var ia = a.task.v.important ? 0 : 1, ib = b.task.v.important ? 0 : 1;
-    if (ia !== ib) return ia - ib;
+    var ia = M.importance(a.task.v), ib = M.importance(b.task.v);
+    if (ia !== ib) return ib - ia;
     var ra = ca.dR === null ? Infinity : ca.dR, rb = cb.dR === null ? Infinity : cb.dR;
     if (ra !== rb) return ra < rb ? -1 : 1;
     var da = ca.dD === null ? Infinity : ca.dD, db = cb.dD === null ? Infinity : cb.dD;
@@ -339,7 +362,7 @@
 
     function matches(t) {
       if (opts.fType && t.v.type !== opts.fType) return false;
-      if (opts.fImportant && !t.v.important) return false;
+      if (opts.fImportant && !M.importance(t.v)) return false;
       if (q) {
         var loc = getLocal(t.id);
         var hay = u.fold(t.v.title) + '\n' + u.fold(t.v.patientId ? (display[t.v.patientId] || '') : '') + '\n' + u.fold(loc && loc.note ? loc.note : '');

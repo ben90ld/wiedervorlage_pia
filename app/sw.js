@@ -3,7 +3,7 @@
  * Neue Versionen werden erst nach Bestätigung in der App aktiviert.
  */
 'use strict';
-var VERSION = '0.4.0';
+var VERSION = '2.0.0';
 var CACHE = 'wv-app-' + VERSION;
 var FILES = ['./', 'index.html', 'app.js', 'config.js', 'styles.css', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-512-maskable.png', 'icons/apple-touch-icon.png'];
